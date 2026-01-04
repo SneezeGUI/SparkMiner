@@ -53,6 +53,7 @@ typedef struct {
     uint32_t nonce;                 // Winning nonce
     uint32_t msgId;                 // Stratum message ID
     uint32_t sessionId;             // Session ID for tracking
+    uint32_t sentTime;              // Timestamp when sent to pool (ms)
     uint32_t versionBits;           // Version rolling bits (ASICBoost)
     uint32_t flags;                 // SUBMIT_FLAG_* values
     double difficulty;              // Share difficulty
@@ -70,6 +71,8 @@ typedef struct {
     volatile uint32_t blocks;       // Full blocks found (lottery wins!)
     volatile uint32_t matches32;    // 32-bit difficulty matches
     volatile uint32_t matches16;    // 16-bit matches (for stats)
+    volatile uint32_t lastLatency;  // Last round-trip latency in ms
+    volatile uint32_t avgLatency;   // Moving average latency in ms (EMA)
     double bestDifficulty;          // Best difficulty found
     uint32_t startTime;             // Mining start timestamp
     uint32_t templates;             // Jobs received from pool

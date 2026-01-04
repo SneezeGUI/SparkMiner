@@ -29,6 +29,7 @@ typedef struct {
     uint32_t blocks32;
     uint32_t blocksFound;
     uint32_t uptimeSeconds;
+    uint32_t avgLatency;        // Average pool latency in ms
 
     // Pool info
     bool poolConnected;

@@ -220,6 +220,13 @@ static void drawHeader(const display_data_t *data) {
     s_tft.print("V");
     s_tft.print(getMajorVersion());
 
+    // Temperature
+    float temp = temperatureRead();
+    s_tft.setTextColor(COLOR_SPARK2);
+    s_tft.setCursor(190, 16);
+    s_tft.print((int)temp);
+    s_tft.print("C");
+
     // Status indicators (right side) with labels
     s_tft.setTextSize(1);
     int iconX = SCREEN_W - MARGIN - 12;
@@ -273,7 +280,7 @@ static void drawMiningScreen(const display_data_t *data) {
         {"Best",     formatDifficulty(data->bestDifficulty), COLOR_SPARK1},
         {"Hashes",   formatNumber(data->totalHashes), COLOR_FG},
         {"Uptime",   formatUptime(data->uptimeSeconds), COLOR_FG},
-        {"Jobs",     String(data->templates), COLOR_FG},
+        {"Ping",     String(data->avgLatency) + "ms", COLOR_FG},
         {"32-bit",   String(data->blocks32), COLOR_SPARK2},
         {"Blocks",   String(data->blocksFound), COLOR_SUCCESS},
     };
@@ -345,6 +352,14 @@ static void drawMiningScreen(const display_data_t *data) {
     s_tft.print("IP: ");
     s_tft.setTextColor(COLOR_FG);
     s_tft.print(data->ipAddress ? data->ipAddress : "---");
+
+    // Ping on right
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(SCREEN_W - 90, y);
+    s_tft.print("Ping: ");
+    s_tft.setTextColor(COLOR_FG);
+    s_tft.print(data->avgLatency);
+    s_tft.print("ms");
 }
 
 static void drawStatsScreen(const display_data_t *data) {

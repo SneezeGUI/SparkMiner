@@ -39,6 +39,7 @@ static void updateDisplayData(display_data_t *data) {
     data->blocks32 = mstats->matches32;
     data->blocksFound = mstats->blocks;
     data->uptimeSeconds = (millis() - s_startTime) / 1000;
+    data->avgLatency = mstats->avgLatency;
 
     // Calculate hashrate with EMA smoothing
     static uint64_t lastHashes = 0;
@@ -169,11 +170,11 @@ void monitor_task(void *param) {
             // Also print to serial for headless/debug
             static uint32_t lastSerialPrint = 0;
             if (now - lastSerialPrint >= 10000) {
-                Serial.printf("[STATS] Hashrate: %.2f H/s | Hashes: %llu | Shares: %u/%u | Best: %.4f\n",
+                Serial.printf("[STATS] Hashrate: %.2f H/s | Shares: %u/%u | Ping: %u ms | Best: %.4f\n",
                     displayData.hashRate,
-                    displayData.totalHashes,
                     displayData.sharesAccepted,
                     displayData.sharesAccepted + displayData.sharesRejected,
+                    displayData.avgLatency,
                     displayData.bestDifficulty);
 
                 if (displayData.btcPrice > 0) {

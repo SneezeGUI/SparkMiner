@@ -399,17 +399,86 @@ void miner_set_extranonce(const char *extraNonce1, int extraNonce2Size) {
 }
 
 // ============================================================
-// Mining Task - Core 0 (Idle - Core 1 handles all mining)
+// Mining Task - Core 0 (Software SHA-256, no hardware contention)
 // ============================================================
 
 void miner_task_core0(void *param) {
-    Serial.printf("[MINER0] Started on core %d (IDLE - pipelined mode)\n", xPortGetCoreID());
+    block_header_t hb;
+    sha256_hash_t ctx;
+    char jobId[MAX_JOB_ID_LEN];
+    uint32_t minerId = 0;
+    uint32_t yieldCounter = 0;
+    uint8_t hash_raw[32];
 
-    // Core 0 stays idle to avoid SHA hardware contention with Core 1's pipelined mining
-    // System tasks (WiFi, stratum, monitor) run on Core 0
+    Serial.printf("[MINER0] Started on core %d (SOFTWARE SHA, priority %d)\n",
+                  xPortGetCoreID(), uxTaskPriorityGet(NULL));
+
+    // Wait for first job
+    while (!s_miningActive) {
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
+    Serial.println("[MINER0] Got first job, starting software mining loop");
+
     while (true) {
+        if (!s_miningActive) {
+            s_core0Mining = false;
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        s_core0Mining = true;
+
+        // Copy job data under mutex
+        xSemaphoreTake(s_jobMutex, portMAX_DELAY);
+        memcpy(&hb, &s_pendingBlock, sizeof(block_header_t));
+        strncpy(jobId, s_currentJobId, MAX_JOB_ID_LEN);
+        hb.nonce = s_startNonce[minerId];
+        xSemaphoreGive(s_jobMutex);
+
+        // Create byte-swapped header for software SHA (same format as hardware)
+        uint32_t header_swapped[20];
+        uint32_t *header_words = (uint32_t *)&hb;
+        for (int i = 0; i < 19; i++) {  // Swap all except nonce (we'll update it in loop)
+            header_swapped[i] = __builtin_bswap32(header_words[i]);
+        }
+
+        while (s_miningActive) {
+            // Update nonce in swapped format
+            header_swapped[19] = __builtin_bswap32(hb.nonce);
+
+            // Software double SHA-256 (no hardware, safe for Core 0)
+            // Returns true if 16-bit early check passes
+            if (sha256_soft_double((const uint8_t *)header_swapped, 80, hash_raw)) {
+                // Early 16-bit check passed - convert to hardware-compatible format
+                // Hardware format: reverse word order + byte-swap each word
+                uint32_t *words = (uint32_t *)hash_raw;
+                uint32_t *out = (uint32_t *)ctx.bytes;
+                out[7] = __builtin_bswap32(words[0]);  // H0 -> out[7]
+                out[6] = __builtin_bswap32(words[1]);  // H1 -> out[6]
+                out[5] = __builtin_bswap32(words[2]);  // H2 -> out[5]
+                out[4] = __builtin_bswap32(words[3]);  // H3 -> out[4]
+                out[3] = __builtin_bswap32(words[4]);  // H4 -> out[3]
+                out[2] = __builtin_bswap32(words[5]);  // H5 -> out[2]
+                out[1] = __builtin_bswap32(words[6]);  // H6 -> out[1]
+                out[0] = __builtin_bswap32(words[7]);  // H7 -> out[0]
+
+                // Check against pool target and submit if valid
+                hashCheck(jobId, &ctx, hb.timestamp, hb.nonce);
+            }
+
+            hb.nonce++;
+            s_stats.hashes++;
+            yieldCounter++;
+
+            // Yield every 256 hashes to let monitor/WiFi tasks run
+            if (yieldCounter >= CORE_0_YIELD_COUNT) {
+                yieldCounter = 0;
+                vTaskDelay(1);  // Must use vTaskDelay(1), not taskYIELD()
+            }
+        }
+
         s_core0Mining = false;
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(20 / portTICK_PERIOD_MS);
     }
 }
 

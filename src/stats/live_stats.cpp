@@ -48,17 +48,33 @@ static void logSSLError(const char *context, int code) {
 }
 
 static bool fetchJson(const char *url, DynamicJsonDocument &doc) {
-    WiFiClientSecure client;
-    client.setInsecure();  // Skip certificate verification
-    client.setTimeout(10000);
-
     HTTPClient http;
     http.setUserAgent("SparkMiner/1.0 ESP32");
     http.setTimeout(10000);
 
-    if (!http.begin(client, url)) {
-        logSSLError("connect", -1);
-        return false;
+    bool isHttps = strncmp(url, "https://", 8) == 0;
+    bool beginResult = false;
+
+    if (isHttps) {
+        // Use secure client for HTTPS
+        WiFiClientSecure *secureClient = new WiFiClientSecure();
+        secureClient->setInsecure();
+        secureClient->setTimeout(10000);
+        beginResult = http.begin(*secureClient, url);
+        if (!beginResult) {
+            delete secureClient;
+            logSSLError("connect", -1);
+            return false;
+        }
+    } else {
+        // Use regular client for HTTP (avoids hardware SHA conflicts)
+        WiFiClient *client = new WiFiClient();
+        client->setTimeout(10000);
+        beginResult = http.begin(*client, url);
+        if (!beginResult) {
+            delete client;
+            return false;
+        }
     }
 
     int httpCode = http.GET();
@@ -72,7 +88,7 @@ static bool fetchJson(const char *url, DynamicJsonDocument &doc) {
             }
             return true;
         }
-    } else {
+    } else if (isHttps) {
         logSSLError("request", httpCode);
     }
 
@@ -98,8 +114,8 @@ static void updatePrice() {
 }
 
 static void updateBlockHeight() {
-    WiFiClientSecure client;
-    client.setInsecure();
+    // Use regular HTTP client (API_BLOCK_HEIGHT is now HTTP, not HTTPS)
+    WiFiClient client;
     client.setTimeout(10000);
 
     HTTPClient http;
@@ -119,8 +135,6 @@ static void updateBlockHeight() {
                 s_stats.blockValid = true;
                 xSemaphoreGive(s_statsMutex);
             }
-        } else if (httpCode < 0) {
-            logSSLError("block", httpCode);
         }
         http.end();
     }

@@ -242,6 +242,10 @@ static void handleServerMessage(WiFiClient &client) {
             if (s_pendingResponses[i].msgId == msgId) {
                 mining_stats_t *stats = miner_get_stats();
 
+                uint32_t latency = millis() - s_pendingResponses[i].sentTime;
+                stats->lastLatency = latency;
+                stats->avgLatency = (stats->avgLatency == 0) ? latency : ((stats->avgLatency * 9 + latency) / 10);
+
                 if (accepted) {
                     stats->accepted++;
                     dbg("[STRATUM] Share accepted!\n");
@@ -350,6 +354,7 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
         subId, MINER_NAME, AUTO_VERSION);
 
     Serial.printf("[STRATUM] TX: %s\n", msg);
+    uint32_t startSub = millis();
     if (!sendMessage(client, msg)) return false;
 
     // Small delay to allow server to process (like NerdMiner)
@@ -361,6 +366,12 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
         Serial.println("[STRATUM] No subscribe response");
         return false;
     }
+
+    // Record subscribe latency
+    uint32_t subLatency = millis() - startSub;
+    mining_stats_t *stats = miner_get_stats();
+    stats->lastLatency = subLatency;
+    stats->avgLatency = (stats->avgLatency == 0) ? subLatency : ((stats->avgLatency * 9 + subLatency) / 10);
 
     if (!parseSubscribeResponse(resp)) {
         Serial.println("[STRATUM] Subscribe failed");
@@ -388,6 +399,7 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
         authId, fullUsername, password);
 
     Serial.printf("[STRATUM] TX: %s\n", msg);
+    uint32_t startAuth = millis();
     if (!sendMessage(client, msg)) return false;
 
     // Small delay before reading
@@ -398,6 +410,11 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
         Serial.println("[STRATUM] No authorize response");
         return false;
     }
+
+    // Record authorize latency
+    uint32_t authLatency = millis() - startAuth;
+    stats->lastLatency = authLatency;
+    stats->avgLatency = (stats->avgLatency * 9 + authLatency) / 10;
 
     if (!parseAuthorizeResponse(resp)) {
         Serial.println("[STRATUM] Authorization failed");
@@ -429,9 +446,10 @@ static void submitShare(WiFiClient &client, const submit_entry_t *entry) {
         versionBits);
 
     if (sendMessage(client, msg)) {
-        // Store in pending responses
+        // Store in pending responses for latency tracking
         submit_entry_t pending = *entry;
         pending.msgId = msgId;
+        pending.sentTime = millis();
 
         s_pendingResponses[s_pendingIndex] = pending;
         s_pendingIndex = (s_pendingIndex + 1) % MAX_PENDING_SUBMISSIONS;

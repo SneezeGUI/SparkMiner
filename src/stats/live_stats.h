@@ -13,19 +13,21 @@
 #include <Arduino.h>
 
 // API URLs
+// Using HTTP for mempool.space to avoid SSL/hardware SHA conflicts during mining
 #define API_BTC_PRICE       "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
-#define API_BLOCK_HEIGHT    "https://mempool.space/api/blocks/tip/height"
-#define API_HASHRATE        "https://mempool.space/api/v1/mining/hashrate/3d"
-#define API_DIFFICULTY      "https://mempool.space/api/v1/difficulty-adjustment"
-#define API_FEES            "https://mempool.space/api/v1/fees/recommended"
+#define API_BLOCK_HEIGHT    "http://mempool.space/api/blocks/tip/height"
+#define API_HASHRATE        "http://mempool.space/api/v1/mining/hashrate/3d"
+#define API_DIFFICULTY      "http://mempool.space/api/v1/difficulty-adjustment"
+#define API_FEES            "http://mempool.space/api/v1/fees/recommended"
 #define API_PUBLIC_POOL     "https://public-pool.io:40557/api/client/"
 
 // Update intervals (milliseconds)
-#define UPDATE_PRICE_MS     60000   // 1 minute
+// Longer intervals reduce SSL/HTTPS interference with hardware SHA mining
+#define UPDATE_PRICE_MS     300000  // 5 minutes (reduce API load)
 #define UPDATE_BLOCK_MS     120000  // 2 minutes
-#define UPDATE_NETWORK_MS   120000  // 2 minutes
-#define UPDATE_FEES_MS      60000   // 1 minute
-#define UPDATE_POOL_MS      60000   // 1 minute
+#define UPDATE_NETWORK_MS   300000  // 5 minutes
+#define UPDATE_FEES_MS      300000  // 5 minutes
+#define UPDATE_POOL_MS      120000  // 2 minutes
 
 // Live stats data structure
 typedef struct {
