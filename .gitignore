@@ -1,0 +1,24 @@
+# PlatformIO
+.pio/
+.venv/
+
+# Build outputs
+firmware/
+
+# Logs
+logs/
+
+# Development notes
+docs/
+.claude/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local config (sensitive)
+config.json
