@@ -2,8 +2,8 @@
 .pio/
 .venv/
 
-# Build outputs
-firmware/
+# Build outputs (dev only, versioned releases are tracked)
+firmware/dev/
 
 # Logs
 logs/
