@@ -2,10 +2,12 @@
  * SparkMiner - Display Driver Implementation
  * TFT display for CYD (Cheap Yellow Display) boards
  *
+ * Author: Sneeze (github.com/SneezeGUI)
  * Based on BitsyMiner by Justin Williams (GPL v3)
  */
 
 #include <Arduino.h>
+#include <math.h>
 #include <board_config.h>
 #include "display.h"
 
@@ -33,13 +35,16 @@
 #define LEDC_FREQ       5000
 #define LEDC_RESOLUTION 12
 
-// Colors (RGB565)
-#define COLOR_BG        0x1082  // Dark blue-gray
+// Colors (RGB565) - Dark Spark Theme
+#define COLOR_BG        0x0000  // Pure black
 #define COLOR_FG        0xFFFF  // White
-#define COLOR_ACCENT    0xFD20  // Orange
+#define COLOR_ACCENT    0xFD00  // Bright orange (spark core)
+#define COLOR_SPARK1    0xFBE0  // Yellow-orange (spark glow)
+#define COLOR_SPARK2    0xFC60  // Amber (spark edge)
 #define COLOR_SUCCESS   0x07E0  // Green
 #define COLOR_ERROR     0xF800  // Red
-#define COLOR_DIM       0x7BEF  // Gray
+#define COLOR_DIM       0x528A  // Darker gray
+#define COLOR_PANEL     0x10A2  // Very dark gray panel
 
 // Layout
 #define SCREEN_W        320
@@ -128,161 +133,323 @@ static String formatDifficulty(double diff) {
 }
 
 // ============================================================
+// Spark Logo Drawing
+// ============================================================
+
+// 16x24 lightning bolt bitmap (1 = pixel on)
+static const uint16_t BOLT_W = 16;
+static const uint16_t BOLT_H = 24;
+static const uint8_t boltBitmap[] = {
+    0b00000111, 0b11100000,  // row 0:      ######
+    0b00001111, 0b11100000,  // row 1:     #######
+    0b00011111, 0b11000000,  // row 2:    #######
+    0b00111111, 0b10000000,  // row 3:   #######
+    0b01111111, 0b00000000,  // row 4:  #######
+    0b11111110, 0b00000000,  // row 5: #######
+    0b11111100, 0b00000000,  // row 6: ######
+    0b11111111, 0b11110000,  // row 7: ############ <- STEP juts right
+    0b01111111, 0b11110000,  // row 8:  ###########
+    0b00111111, 0b11100000,  // row 9:   #########
+    0b00011111, 0b11000000,  // row 10:    #######
+    0b00001111, 0b10000000,  // row 11:     ######
+    0b00011111, 0b00000000,  // row 12:    #####
+    0b00111110, 0b00000000,  // row 13:   #####
+    0b01111100, 0b00000000,  // row 14:  #####
+    0b11111000, 0b00000000,  // row 15: #####
+    0b11110000, 0b00000000,  // row 16: ####
+    0b01110000, 0b00000000,  // row 17:  ###
+    0b00110000, 0b00000000,  // row 18:   ##
+    0b00010000, 0b00000000,  // row 19:    #
+    0b00000000, 0b00000000,  // row 20:
+    0b00000000, 0b00000000,  // row 21:
+    0b00000000, 0b00000000,  // row 22:
+    0b00000000, 0b00000000,  // row 23:
+};
+
+static void drawSparkLogo(int x, int y, int size, bool toSprite = false) {
+    // Draw the lightning bolt bitmap scaled to fit
+    float scale = (float)size / BOLT_H;
+
+    for (int row = 0; row < BOLT_H; row++) {
+        uint8_t b1 = boltBitmap[row * 2];
+        uint8_t b2 = boltBitmap[row * 2 + 1];
+        uint16_t rowBits = (b1 << 8) | b2;
+
+        for (int col = 0; col < BOLT_W; col++) {
+            if (rowBits & (0x8000 >> col)) {
+                int px = x + (int)(col * scale);
+                int py = y + (int)(row * scale);
+                int pw = (int)scale + 1;
+                int ph = (int)scale + 1;
+                s_tft.fillRect(px, py, pw, ph, COLOR_SPARK1);
+            }
+        }
+    }
+}
+
+// ============================================================
 // Screen Drawing Functions
 // ============================================================
 
 static void drawHeader(const display_data_t *data) {
-    // Background
-    s_tft.fillRect(0, 0, SCREEN_W, HEADER_HEIGHT, COLOR_ACCENT);
+    // Dark header with accent line
+    s_tft.fillRect(0, 0, SCREEN_W, HEADER_HEIGHT, COLOR_PANEL);
+    s_tft.drawFastHLine(0, HEADER_HEIGHT - 1, SCREEN_W, COLOR_ACCENT);
 
-    // Title
-    s_tft.setTextColor(COLOR_BG);
+    // Spark logo
+    drawSparkLogo(8, 5, 30);
+
+    // Title with spark gradient effect
+    s_tft.setTextColor(COLOR_ACCENT);
     s_tft.setTextSize(2);
-    s_tft.setCursor(MARGIN, 12);
-    s_tft.print("SparkMiner");
+    s_tft.setCursor(42, 12);
+    s_tft.print("Spark");
+    s_tft.setTextColor(COLOR_SPARK1);
+    s_tft.print("Miner");
 
-    // Status icons (right side)
-    int iconX = SCREEN_W - MARGIN - 10;
+    // Status indicators (right side) with labels
+    s_tft.setTextSize(1);
+    int iconX = SCREEN_W - MARGIN - 12;
 
     // Pool status
-    s_tft.fillCircle(iconX, 20, 6, data->poolConnected ? COLOR_SUCCESS : COLOR_ERROR);
-    iconX -= 20;
+    uint16_t poolColor = data->poolConnected ? COLOR_SUCCESS : COLOR_ERROR;
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(iconX - 8, 4);
+    s_tft.print("POOL");
+    s_tft.fillCircle(iconX, 24, 6, poolColor);
+    s_tft.drawCircle(iconX, 24, 7, poolColor);
+    iconX -= 36;
 
-    // WiFi status
-    s_tft.fillCircle(iconX, 20, 6, data->wifiConnected ? COLOR_SUCCESS : COLOR_ERROR);
+    // WiFi/WAN status
+    uint16_t wifiColor = data->wifiConnected ? COLOR_SUCCESS : COLOR_ERROR;
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(iconX - 6, 4);
+    s_tft.print("WAN");
+    s_tft.fillCircle(iconX, 24, 6, wifiColor);
+    s_tft.drawCircle(iconX, 24, 7, wifiColor);
 }
 
 static void drawMiningScreen(const display_data_t *data) {
-    int y = HEADER_HEIGHT + MARGIN;
+    int y = HEADER_HEIGHT + 8;
 
-    s_tft.setTextColor(COLOR_FG);
-    s_tft.setTextSize(1);
+    // Hashrate panel with glow effect
+    s_tft.fillRoundRect(MARGIN - 4, y - 4, SCREEN_W - 2*MARGIN + 8, 38, 4, COLOR_PANEL);
+    s_tft.drawRoundRect(MARGIN - 4, y - 4, SCREEN_W - 2*MARGIN + 8, 38, 4, COLOR_ACCENT);
 
-    // Hashrate (large)
     s_tft.setTextSize(2);
-    s_tft.setCursor(MARGIN, y);
+    s_tft.setCursor(MARGIN + 4, y + 6);
     s_tft.setTextColor(COLOR_ACCENT);
     s_tft.print(formatHashrate(data->hashRate));
-    y += 30;
+
+    // Shares on right side of hashrate panel
+    s_tft.setTextSize(1);
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(SCREEN_W - 100, y + 4);
+    s_tft.print("Shares");
+    s_tft.setTextColor(COLOR_FG);
+    s_tft.setCursor(SCREEN_W - 100, y + 16);
+    String shares = String(data->sharesAccepted) + "/" + String(data->sharesAccepted + data->sharesRejected);
+    s_tft.print(shares);
+
+    y += 44;
 
     s_tft.setTextSize(1);
-    s_tft.setTextColor(COLOR_FG);
 
-    // Stats grid
-    struct { const char *label; String value; } stats[] = {
-        {"Hashes",     formatNumber(data->totalHashes)},
-        {"Best Diff",  formatDifficulty(data->bestDifficulty)},
-        {"Shares",     String(data->sharesAccepted) + "/" + String(data->sharesAccepted + data->sharesRejected)},
-        {"Jobs",       String(data->templates)},
-        {"32-bit",     String(data->blocks32)},
-        {"Blocks",     String(data->blocksFound)},
-        {"Uptime",     formatUptime(data->uptimeSeconds)},
-        {"Pool Diff",  formatDifficulty(data->poolDifficulty)},
+    // Stats grid with panels
+    struct { const char *label; String value; uint16_t color; } stats[] = {
+        {"Best",     formatDifficulty(data->bestDifficulty), COLOR_SPARK1},
+        {"Hashes",   formatNumber(data->totalHashes), COLOR_FG},
+        {"Uptime",   formatUptime(data->uptimeSeconds), COLOR_FG},
+        {"Jobs",     String(data->templates), COLOR_FG},
+        {"32-bit",   String(data->blocks32), COLOR_SPARK2},
+        {"Blocks",   String(data->blocksFound), COLOR_SUCCESS},
     };
 
-    for (int i = 0; i < 8; i++) {
-        int col = i % 2;
-        int row = i / 2;
-        int x = MARGIN + col * (SCREEN_W / 2);
-        int ly = y + row * LINE_HEIGHT;
+    for (int i = 0; i < 6; i++) {
+        int col = i % 3;
+        int row = i / 3;
+        int boxW = (SCREEN_W - 4*MARGIN) / 3;
+        int x = MARGIN + col * (boxW + MARGIN/2);
+        int ly = y + row * (LINE_HEIGHT + 12);
+
+        // Mini panel
+        s_tft.fillRoundRect(x - 2, ly - 2, boxW, LINE_HEIGHT + 8, 3, COLOR_PANEL);
 
         s_tft.setTextColor(COLOR_DIM);
-        s_tft.setCursor(x, ly);
+        s_tft.setCursor(x + 2, ly);
         s_tft.print(stats[i].label);
-        s_tft.print(": ");
 
-        s_tft.setTextColor(COLOR_FG);
+        s_tft.setTextColor(stats[i].color);
+        s_tft.setCursor(x + 2, ly + 11);
         s_tft.print(stats[i].value);
     }
 
-    y += 4 * LINE_HEIGHT + 10;
+    y += 2 * (LINE_HEIGHT + 12) + 8;
 
-    // Pool info
+    // Pool info panel
+    s_tft.fillRoundRect(MARGIN - 4, y, SCREEN_W - 2*MARGIN + 8, 50, 4, COLOR_PANEL);
+    s_tft.drawRoundRect(MARGIN - 4, y, SCREEN_W - 2*MARGIN + 8, 50, 4, COLOR_SPARK2);
+
+    y += 6;
+
+    // Pool name and status
     s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(MARGIN, y);
+    s_tft.setCursor(MARGIN + 2, y);
     s_tft.print("Pool: ");
     s_tft.setTextColor(data->poolConnected ? COLOR_SUCCESS : COLOR_ERROR);
     s_tft.print(data->poolName ? data->poolName : "Disconnected");
 
-    y += LINE_HEIGHT;
+    // Pool workers on right
+    if (data->poolWorkersTotal > 0) {
+        s_tft.setTextColor(COLOR_SPARK1);
+        s_tft.setCursor(SCREEN_W - 90, y);
+        s_tft.print(String(data->poolWorkersTotal) + " miners");
+    }
+
+    y += 14;
+
+    // Pool difficulty
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(MARGIN + 2, y);
+    s_tft.print("Diff: ");
+    s_tft.setTextColor(COLOR_FG);
+    s_tft.print(formatDifficulty(data->poolDifficulty));
+
+    // Your workers on address
+    if (data->poolWorkersAddress > 0) {
+        s_tft.setTextColor(COLOR_DIM);
+        s_tft.setCursor(SCREEN_W - 90, y);
+        s_tft.print("You: ");
+        s_tft.setTextColor(COLOR_ACCENT);
+        s_tft.print(String(data->poolWorkersAddress));
+    }
+
+    y += 14;
 
     // IP address
     s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(MARGIN, y);
+    s_tft.setCursor(MARGIN + 2, y);
     s_tft.print("IP: ");
     s_tft.setTextColor(COLOR_FG);
-    s_tft.print(data->ipAddress ? data->ipAddress : "Not connected");
+    s_tft.print(data->ipAddress ? data->ipAddress : "---");
 }
 
 static void drawStatsScreen(const display_data_t *data) {
-    int y = HEADER_HEIGHT + MARGIN;
+    int y = HEADER_HEIGHT + 8;
 
-    s_tft.setTextColor(COLOR_FG);
-    s_tft.setTextSize(1);
+    // BTC Price panel
+    s_tft.fillRoundRect(MARGIN - 4, y - 4, SCREEN_W - 2*MARGIN + 8, 38, 4, COLOR_PANEL);
+    s_tft.drawRoundRect(MARGIN - 4, y - 4, SCREEN_W - 2*MARGIN + 8, 38, 4, COLOR_SPARK1);
 
-    // BTC Price (large)
     s_tft.setTextSize(2);
-    s_tft.setCursor(MARGIN, y);
-    s_tft.setTextColor(COLOR_ACCENT);
+    s_tft.setCursor(MARGIN + 4, y + 6);
+    s_tft.setTextColor(COLOR_SPARK1);
     if (data->btcPrice > 0) {
         s_tft.print("$");
         s_tft.print(String(data->btcPrice, 0));
     } else {
+        s_tft.setTextColor(COLOR_DIM);
         s_tft.print("Loading...");
     }
-    y += 30;
 
+    // Block height on right
     s_tft.setTextSize(1);
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(SCREEN_W - 100, y + 4);
+    s_tft.print("Block");
     s_tft.setTextColor(COLOR_FG);
+    s_tft.setCursor(SCREEN_W - 100, y + 16);
+    s_tft.print(data->blockHeight > 0 ? String(data->blockHeight) : "---");
 
-    // Network stats
-    struct { const char *label; String value; } stats[] = {
-        {"Block Height", data->blockHeight > 0 ? String(data->blockHeight) : "---"},
-        {"Network Hash", data->networkHashrate.length() > 0 ? data->networkHashrate : "---"},
-        {"Difficulty",   data->networkDifficulty.length() > 0 ? data->networkDifficulty : "---"},
-        {"Fee (30min)",  data->halfHourFee > 0 ? String(data->halfHourFee) + " sat/vB" : "---"},
-    };
+    y += 44;
 
-    for (int i = 0; i < 4; i++) {
-        s_tft.setTextColor(COLOR_DIM);
-        s_tft.setCursor(MARGIN, y);
-        s_tft.print(stats[i].label);
-        s_tft.print(": ");
+    // Network stats panel
+    s_tft.fillRoundRect(MARGIN - 4, y, SCREEN_W - 2*MARGIN + 8, 60, 4, COLOR_PANEL);
 
-        s_tft.setTextColor(COLOR_FG);
-        s_tft.print(stats[i].value);
-        y += LINE_HEIGHT;
+    y += 6;
+    s_tft.setTextSize(1);
+
+    // Network hashrate
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(MARGIN + 2, y);
+    s_tft.print("Network: ");
+    s_tft.setTextColor(COLOR_FG);
+    s_tft.print(data->networkHashrate.length() > 0 ? data->networkHashrate : "---");
+
+    // Fee on right
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(SCREEN_W - 90, y);
+    s_tft.print("Fee: ");
+    s_tft.setTextColor(COLOR_SPARK2);
+    s_tft.print(data->halfHourFee > 0 ? String(data->halfHourFee) + " sat" : "---");
+
+    y += 16;
+
+    // Difficulty
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(MARGIN + 2, y);
+    s_tft.print("Difficulty: ");
+    s_tft.setTextColor(COLOR_FG);
+    s_tft.print(data->networkDifficulty.length() > 0 ? data->networkDifficulty : "---");
+
+    y += 32;
+
+    // Your mining panel
+    s_tft.fillRoundRect(MARGIN - 4, y, SCREEN_W - 2*MARGIN + 8, 55, 4, COLOR_PANEL);
+    s_tft.drawRoundRect(MARGIN - 4, y, SCREEN_W - 2*MARGIN + 8, 55, 4, COLOR_ACCENT);
+
+    y += 6;
+
+    s_tft.setTextColor(COLOR_ACCENT);
+    s_tft.setCursor(MARGIN + 2, y);
+    s_tft.print("Your Mining");
+
+    // Pool workers
+    if (data->poolWorkersTotal > 0) {
+        s_tft.setTextColor(COLOR_SPARK1);
+        s_tft.setCursor(SCREEN_W - 90, y);
+        s_tft.print(String(data->poolWorkersTotal) + " on pool");
     }
 
-    y += 10;
+    y += 14;
 
-    // Local mining summary
-    s_tft.setTextColor(COLOR_ACCENT);
-    s_tft.setCursor(MARGIN, y);
-    s_tft.print("Your Mining:");
-    y += LINE_HEIGHT;
-
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(MARGIN + 2, y);
+    s_tft.print("Rate: ");
     s_tft.setTextColor(COLOR_FG);
-    s_tft.setCursor(MARGIN, y);
-    s_tft.print("Hashrate: ");
     s_tft.print(formatHashrate(data->hashRate));
-    y += LINE_HEIGHT;
 
-    s_tft.setCursor(MARGIN, y);
+    y += 14;
+
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(MARGIN + 2, y);
     s_tft.print("Best: ");
+    s_tft.setTextColor(COLOR_SPARK1);
     s_tft.print(formatDifficulty(data->bestDifficulty));
+
+    // Shares on right
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(SCREEN_W - 90, y);
+    s_tft.print("Shares: ");
+    s_tft.setTextColor(COLOR_FG);
+    s_tft.print(String(data->sharesAccepted));
 }
 
 static void drawClockScreen(const display_data_t *data) {
     // Get current time
     struct tm timeinfo;
     if (!getLocalTime(&timeinfo)) {
-        s_tft.setTextColor(COLOR_FG);
+        s_tft.setTextColor(COLOR_DIM);
         s_tft.setTextSize(2);
         s_tft.setCursor(SCREEN_W / 2 - 60, SCREEN_H / 2 - 10);
         s_tft.print("No Time");
         return;
     }
+
+    // Time panel
+    int y = HEADER_HEIGHT + 20;
+    s_tft.fillRoundRect(MARGIN - 4, y - 4, SCREEN_W - 2*MARGIN + 8, 60, 6, COLOR_PANEL);
+    s_tft.drawRoundRect(MARGIN - 4, y - 4, SCREEN_W - 2*MARGIN + 8, 60, 6, COLOR_ACCENT);
 
     // Large time display
     char timeStr[16];
@@ -290,8 +457,10 @@ static void drawClockScreen(const display_data_t *data) {
 
     s_tft.setTextColor(COLOR_ACCENT);
     s_tft.setTextSize(4);
-    s_tft.setCursor(SCREEN_W / 2 - 96, HEADER_HEIGHT + 30);
+    s_tft.setCursor(SCREEN_W / 2 - 96, y + 10);
     s_tft.print(timeStr);
+
+    y += 70;
 
     // Date
     char dateStr[32];
@@ -299,31 +468,47 @@ static void drawClockScreen(const display_data_t *data) {
 
     s_tft.setTextColor(COLOR_FG);
     s_tft.setTextSize(2);
-    s_tft.setCursor(SCREEN_W / 2 - 90, HEADER_HEIGHT + 80);
+    s_tft.setCursor(SCREEN_W / 2 - 90, y);
     s_tft.print(dateStr);
 
-    // Mining summary at bottom
-    int y = SCREEN_H - 60;
+    // Mining summary panel at bottom
+    y = SCREEN_H - 55;
+    s_tft.fillRoundRect(MARGIN - 4, y, SCREEN_W - 2*MARGIN + 8, 50, 4, COLOR_PANEL);
+
+    y += 8;
     s_tft.setTextSize(1);
+
+    // Hashrate
     s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(MARGIN, y);
-    s_tft.print("Hashrate: ");
-    s_tft.setTextColor(COLOR_FG);
+    s_tft.setCursor(MARGIN + 2, y);
+    s_tft.print("Hash: ");
+    s_tft.setTextColor(COLOR_ACCENT);
     s_tft.print(formatHashrate(data->hashRate));
 
-    y += LINE_HEIGHT;
+    // BTC price on right
+    if (data->btcPrice > 0) {
+        s_tft.setTextColor(COLOR_SPARK1);
+        s_tft.setCursor(SCREEN_W - 85, y);
+        s_tft.print("$");
+        s_tft.print(String(data->btcPrice, 0));
+    }
+
+    y += 16;
+
+    // Shares
     s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(MARGIN, y);
+    s_tft.setCursor(MARGIN + 2, y);
     s_tft.print("Shares: ");
     s_tft.setTextColor(COLOR_FG);
     s_tft.print(String(data->sharesAccepted));
 
-    // BTC price on right
-    if (data->btcPrice > 0) {
-        s_tft.setTextColor(COLOR_ACCENT);
-        s_tft.setCursor(SCREEN_W - 100, y - LINE_HEIGHT);
-        s_tft.print("$");
-        s_tft.print(String(data->btcPrice, 0));
+    // Block height on right
+    if (data->blockHeight > 0) {
+        s_tft.setTextColor(COLOR_DIM);
+        s_tft.setCursor(SCREEN_W - 85, y);
+        s_tft.print("Blk ");
+        s_tft.setTextColor(COLOR_FG);
+        s_tft.print(String(data->blockHeight));
     }
 }
 
@@ -347,22 +532,40 @@ void display_init(uint8_t rotation, uint8_t brightness) {
     s_brightness = brightness;
     setBacklight(brightness);
 
-    // Show boot screen
-    s_tft.setTextColor(COLOR_ACCENT);
-    s_tft.setTextSize(3);
-    s_tft.setCursor(40, 80);
-    s_tft.print("SparkMiner");
+    // Show boot screen with spark logo
+    s_tft.fillScreen(COLOR_BG);
 
+    // Draw large spark logo in center
+    drawSparkLogo(SCREEN_W/2 - 40, 40, 80);
+
+    // Title with spark gradient
+    s_tft.setTextSize(3);
+    s_tft.setTextColor(COLOR_ACCENT);
+    s_tft.setCursor(55, 135);
+    s_tft.print("Spark");
+    s_tft.setTextColor(COLOR_SPARK1);
+    s_tft.print("Miner");
+
+    // Version
     s_tft.setTextColor(COLOR_FG);
     s_tft.setTextSize(1);
-    s_tft.setCursor(80, 130);
+    s_tft.setCursor(135, 170);
     s_tft.print("v" AUTO_VERSION);
 
+    // Tagline
     s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(60, 160);
-    s_tft.print("BitsyMiner + NerdMiner");
+    s_tft.setCursor(70, 185);
+    s_tft.print("A tiny spark of mining power");
 
-    delay(1500);
+    // Credits
+    s_tft.setTextColor(COLOR_SPARK2);
+    s_tft.setCursor(120, 210);
+    s_tft.print("by Sneeze");
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(75, 225);
+    s_tft.print("github.com/SneezeGUI");
+
+    delay(2000);
 
     s_needsRedraw = true;
     Serial.println("[DISPLAY] Initialized");
@@ -371,22 +574,28 @@ void display_init(uint8_t rotation, uint8_t brightness) {
 void display_update(const display_data_t *data) {
     if (!data) return;
 
-    // Check if data changed significantly
-    bool changed = s_needsRedraw ||
-        (data->totalHashes != s_lastData.totalHashes) ||
+    // Check if anything changed
+    bool dataChanged = (data->totalHashes != s_lastData.totalHashes) ||
         (abs(data->hashRate - s_lastData.hashRate) > 100) ||
-        (data->sharesAccepted != s_lastData.sharesAccepted) ||
-        (data->poolConnected != s_lastData.poolConnected);
+        (data->sharesAccepted != s_lastData.sharesAccepted);
 
-    if (!changed) return;
+    bool statusChanged = (data->poolConnected != s_lastData.poolConnected) ||
+        (data->wifiConnected != s_lastData.wifiConnected);
 
-    // Clear screen
-    s_tft.fillScreen(COLOR_BG);
+    if (!s_needsRedraw && !dataChanged && !statusChanged) return;
 
-    // Draw header
-    drawHeader(data);
+    // Full screen clear only on screen change
+    if (s_needsRedraw) {
+        s_tft.fillScreen(COLOR_BG);
+    }
 
-    // Draw current screen
+    // Header: redraw on screen change or status change
+    if (s_needsRedraw || statusChanged) {
+        drawHeader(data);
+    }
+
+    // Content: redraw on any change
+    // Each screen's panels use fillRoundRect to clear their areas
     switch (s_currentScreen) {
         case SCREEN_MINING:
             drawMiningScreen(data);

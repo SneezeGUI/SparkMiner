@@ -35,6 +35,12 @@ typedef struct {
     const char *poolName;
     double poolDifficulty;
 
+    // Pool stats (from API)
+    int poolWorkersTotal;       // Total workers on pool
+    int poolWorkersAddress;     // Workers on your address
+    String poolHashrate;        // Pool total hashrate
+    String addressBestDiff;     // Your best difficulty on pool
+
     // Network info
     bool wifiConnected;
     const char *ipAddress;

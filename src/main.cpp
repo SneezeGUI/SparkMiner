@@ -4,6 +4,7 @@
  *
  * A tiny spark of mining power - combining performance with usability
  *
+ * Author: Sneeze (github.com/SneezeGUI)
  * GPL v3 License
  */
 

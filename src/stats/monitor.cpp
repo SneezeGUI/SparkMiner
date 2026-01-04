@@ -82,6 +82,15 @@ static void updateDisplayData(display_data_t *data) {
     if (lstats->feesValid) {
         data->halfHourFee = lstats->halfHourFee;
     }
+
+    // Pool stats (from API)
+    if (lstats->poolValid) {
+        data->poolWorkersTotal = lstats->poolWorkersCount;
+        data->poolHashrate = lstats->poolTotalHashrate;
+        data->addressBestDiff = lstats->poolBestDifficulty;
+        // poolWorkersAddress would need separate API call for per-address count
+        data->poolWorkersAddress = 1;  // Current device counts as 1
+    }
 }
 
 // ============================================================
