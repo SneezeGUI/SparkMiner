@@ -16,6 +16,7 @@
 #include "sha256_hw.h"  // Hardware SHA-256 wrapper
 #include "sha256_ll.h"  // Low-level hardware SHA register access
 #include "sha256_pipelined.h"  // Pipelined assembly mining (Core 1)
+#include "sha256_soft.h"  // Pure software SHA-256 (Core 0, no hardware)
 #include "../stratum/stratum.h"
 #include "board_config.h"
 
@@ -398,87 +399,18 @@ void miner_set_extranonce(const char *extraNonce1, int extraNonce2Size) {
 }
 
 // ============================================================
-// Mining Task - Core 0 (Software SHA, yields to other tasks)
+// Mining Task - Core 0 (Idle - Core 1 handles all mining)
 // ============================================================
 
 void miner_task_core0(void *param) {
-    block_header_t hb;
-    sha256_hash_t ctx;
-    char jobId[MAX_JOB_ID_LEN];
-    uint32_t minerId = 0;
+    Serial.printf("[MINER0] Started on core %d (IDLE - pipelined mode)\n", xPortGetCoreID());
 
-    // TEMPORARILY DISABLED: Core 0 just runs a dummy loop while we debug pipelined Core 1
-    // Core 1 needs exclusive access to SHA hardware for pipelined mining
-    Serial.printf("[MINER0] Started on core %d (IDLE - pipelined debug mode)\n", xPortGetCoreID());
-
+    // Core 0 stays idle to avoid SHA hardware contention with Core 1's pipelined mining
+    // System tasks (WiFi, stratum, monitor) run on Core 0
     while (true) {
-        // Just yield and let Core 1 have exclusive SHA hardware access
         s_core0Mining = false;
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
-
-    // Original code disabled for debugging:
-#if 0
-    Serial.printf("[MINER0] Started on core %d (baking optimized)\n", xPortGetCoreID());
-
-    while (true) {
-        if (!s_miningActive) {
-            vTaskDelay(100 / portTICK_PERIOD_MS);
-            continue;
-        }
-
-        s_core0Mining = true;
-
-        // Copy job data
-        xSemaphoreTake(s_jobMutex, portMAX_DELAY);
-        memcpy(&hb, &s_pendingBlock, sizeof(block_header_t));
-        strncpy(jobId, s_currentJobId, MAX_JOB_ID_LEN);
-        xSemaphoreGive(s_jobMutex);
-
-        // Create swapped header for hardware SHA (matches NerdMiner behavior)
-        uint32_t header_swapped[20];
-        uint32_t *header_words = (uint32_t *)&hb;
-        for (int i = 0; i < 20; i++) {
-            header_swapped[i] = __builtin_bswap32(header_words[i]);
-        }
-
-        // Pre-compute baking constants for software fallback
-        const uint8_t *tail_sw = (const uint8_t *)&hb + 64;
-        sha256_hw_bake(midstate, tail_sw, &bake);
-
-        // Set starting nonce
-        hb.nonce = s_startNonce[minerId];
-
-        // Acquire hardware SHA lock for this mining burst
-        sha256_ll_acquire();
-
-        uint16_t yieldCounter = 0;
-
-        while (s_miningActive) {
-            yieldCounter++;
-            // Core 0 yields more frequently (every 256 hashes) for WiFi/system tasks
-            if ((yieldCounter & 0xFF) == 0) {
-                sha256_ll_release();
-                vTaskDelay(1);  // Must use vTaskDelay to let IDLE task run and feed WDT
-                sha256_ll_acquire();
-            }
-
-            // Full double SHA-256 (midstate restore doesn't work correctly on ESP32)
-            if (sha256_ll_double_hash_full((const uint8_t *)header_swapped, hb.nonce, ctx.bytes)) {
-                hashCheck(jobId, &ctx, hb.timestamp, hb.nonce);
-            }
-
-            hb.nonce++;
-            s_stats.hashes++;
-        }
-
-        // Release hardware SHA lock
-        sha256_ll_release();
-
-        s_core0Mining = false;
-        vTaskDelay(20 / portTICK_PERIOD_MS);
-    }
-#endif
 }
 
 // ============================================================
