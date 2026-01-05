@@ -352,6 +352,56 @@ def flash_firmware(port, interactive=True):
         print("  5. Try again - sometimes it takes a few attempts")
         return False
 
+def check_port_exists(port):
+    """Check if a specific port exists in the current port list"""
+    ports = list_serial_ports()
+    return any(p[0] == port for p in ports)
+
+def find_new_port(old_port):
+    """Handle COM port change after reset - ESP32-S3 often changes ports"""
+    print(f"\n{color('[INFO]', Colors.BLUE)} Checking if port {old_port} is still available...")
+    time.sleep(2)  # Give the device time to enumerate
+
+    ports = list_serial_ports()
+    port_names = [p[0] for p in ports]
+
+    if old_port in port_names:
+        print(f"{color('[OK]', Colors.GREEN)} Port {old_port} is available")
+        return old_port
+
+    print(f"{color('[WARNING]', Colors.YELLOW)} Port {old_port} is no longer available!")
+    print(f"\n{color('[INFO]', Colors.CYAN)} ESP32-S3 often changes COM ports after reset.")
+
+    if not ports:
+        print(f"{color('[TIP]', Colors.YELLOW)} No ports detected. The device may still be resetting.")
+        wait_for_user("Press RESET on the board, wait 3 seconds, then press ENTER...")
+        time.sleep(1)
+        ports = list_serial_ports()
+
+    if not ports:
+        print(f"{color('[ERROR]', Colors.RED)} No serial ports found!")
+        return None
+
+    if len(ports) == 1:
+        new_port = ports[0][0]
+        print(f"{color('[INFO]', Colors.GREEN)} Found device on {new_port}")
+        return new_port
+
+    # Multiple ports - let user choose
+    print(f"\n{color('Available Ports:', Colors.GREEN)}")
+    print("-" * 60)
+    for i, (p, desc) in enumerate(ports, 1):
+        print(f"  {color(f'[{i}]', Colors.CYAN)} {color(p, Colors.GREEN)} - {desc}")
+    print("-" * 60)
+
+    while True:
+        choice = input(f"\n{color('[?]', Colors.CYAN)} Select the new port (1-{len(ports)}): ").strip()
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(ports):
+                return ports[idx][0]
+        print(f"{color('[ERROR]', Colors.RED)} Invalid selection!")
+
 def open_monitor(port, after_flash=False):
     """Open serial monitor"""
     if not port:
@@ -365,6 +415,12 @@ def open_monitor(port, after_flash=False):
     if after_flash:
         print_reset_instructions()
         wait_for_user("Press RESET on the board, then press ENTER to start monitor...")
+
+        # Re-check port after reset - ESP32-S3 often changes COM ports
+        port = find_new_port(port)
+        if not port:
+            print(f"{color('[ERROR]', Colors.RED)} Could not find device. Try running monitor separately.")
+            return
 
     print(f"\n{color('=' * 60, Colors.CYAN)}")
     print(f"{color(' Serial Monitor', Colors.BOLD)}")
