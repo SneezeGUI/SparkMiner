@@ -43,9 +43,9 @@ void onButtonClick() {
     display_next_screen();
 }
 
-// Double click: flip screen 180°
+// Double click: cycle screen rotation (0->1->2->3->0)
 void onButtonDoubleClick() {
-    Serial.println("[BUTTON] Double-click detected - flipping screen");
+    Serial.println("[BUTTON] Double-click detected - cycling rotation");
     uint8_t newRotation = display_flip_rotation();
     // Save to NVS
     miner_config_t *config = nvs_config_get();

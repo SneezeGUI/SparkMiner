@@ -98,10 +98,25 @@ void display_next_screen();
 void display_redraw();
 
 /**
- * Flip screen rotation 180 degrees
+ * Cycle screen rotation (0 -> 1 -> 2 -> 3 -> 0)
  * @return New rotation value (0-3)
  */
 uint8_t display_flip_rotation();
+
+/**
+ * Get current display width
+ */
+uint16_t display_get_width();
+
+/**
+ * Get current display height
+ */
+uint16_t display_get_height();
+
+/**
+ * Check if display is in portrait mode
+ */
+bool display_is_portrait();
 
 /**
  * Check if screen was touched

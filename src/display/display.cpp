@@ -52,8 +52,6 @@
 #define COLOR_PANEL     0x10A2  // Very dark gray panel
 
 // Layout
-#define SCREEN_W        320
-#define SCREEN_H        240
 #define MARGIN          10
 #define LINE_HEIGHT     22
 #define HEADER_HEIGHT   40
@@ -74,6 +72,18 @@ static display_data_t s_lastData;
 // ============================================================
 // Helper Functions
 // ============================================================
+
+uint16_t display_get_width() {
+    return s_tft.width();
+}
+
+uint16_t display_get_height() {
+    return s_tft.height();
+}
+
+bool display_is_portrait() {
+    return (s_tft.width() < s_tft.height());
+}
 
 static void setBacklight(uint8_t percent) {
     uint32_t duty = (4095 * percent) / 100;
@@ -203,9 +213,12 @@ static int getMajorVersion() {
 // ============================================================
 
 static void drawHeader(const display_data_t *data) {
+    int w = display_get_width();
+    bool isPortrait = display_is_portrait();
+    
     // Dark header with accent line
-    s_tft.fillRect(0, 0, SCREEN_W, HEADER_HEIGHT, COLOR_PANEL);
-    s_tft.drawFastHLine(0, HEADER_HEIGHT - 1, SCREEN_W, COLOR_ACCENT);
+    s_tft.fillRect(0, 0, w, HEADER_HEIGHT, COLOR_PANEL);
+    s_tft.drawFastHLine(0, HEADER_HEIGHT - 1, w, COLOR_ACCENT);
 
     // Spark logo
     drawSparkLogo(8, 5, 30);
@@ -225,41 +238,88 @@ static void drawHeader(const display_data_t *data) {
     s_tft.print("V");
     s_tft.print(getMajorVersion());
 
+    // Temperature (hide if screen too narrow)
+    if (w > 240 && !isPortrait) {
+        float temp = temperatureRead();
+        s_tft.setTextColor(COLOR_SPARK2);
+        s_tft.setCursor(190, 16);
+        s_tft.print((int)temp);
+        s_tft.print("C");
+    }
+
+    if (!isPortrait) {
+        // Status indicators (right side) with labels
+        s_tft.setTextSize(1);
+        int iconX = w - MARGIN - 12;
+
+        // Pool status
+        uint16_t poolColor = data->poolConnected ? COLOR_SUCCESS : COLOR_ERROR;
+        s_tft.setTextColor(COLOR_DIM);
+        s_tft.setCursor(iconX - 8, 4);
+        s_tft.print("POOL");
+        s_tft.fillCircle(iconX, 24, 6, poolColor);
+        s_tft.drawCircle(iconX, 24, 7, poolColor);
+        iconX -= 36;
+
+        // WiFi/WAN status
+        uint16_t wifiColor = data->wifiConnected ? COLOR_SUCCESS : COLOR_ERROR;
+        s_tft.setTextColor(COLOR_DIM);
+        s_tft.setCursor(iconX - 6, 4);
+        s_tft.print("WAN");
+        s_tft.fillCircle(iconX, 24, 6, wifiColor);
+        s_tft.drawCircle(iconX, 24, 7, wifiColor);
+    }
+}
+
+static void drawBottomStatusBar(const display_data_t *data) {
+    if (!display_is_portrait()) return;
+
+    int w = display_get_width();
+    int h = display_get_height();
+    int barHeight = 35;
+    int y = h - barHeight;
+
+    // Draw panel background and border
+    s_tft.fillRect(0, y, w, barHeight, COLOR_PANEL);
+    s_tft.drawFastHLine(0, y, w, COLOR_SPARK2);
+
     // Temperature
     float temp = temperatureRead();
     s_tft.setTextColor(COLOR_SPARK2);
-    s_tft.setCursor(190, 16);
+    s_tft.setTextSize(1);
+    s_tft.setCursor(MARGIN + 10, y + 12);
     s_tft.print((int)temp);
     s_tft.print("C");
 
-    // Status indicators (right side) with labels
-    s_tft.setTextSize(1);
-    int iconX = SCREEN_W - MARGIN - 12;
+    // Calculate positions
+    int wanLabelX = w / 3 - 10;
+    int wanCircleX = wanLabelX + 30;
+    int poolLabelX = 2 * w / 3 - 10;
+    int poolCircleX = poolLabelX + 35;
 
-    // Pool status
-    uint16_t poolColor = data->poolConnected ? COLOR_SUCCESS : COLOR_ERROR;
-    s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(iconX - 8, 4);
-    s_tft.print("POOL");
-    s_tft.fillCircle(iconX, 24, 6, poolColor);
-    s_tft.drawCircle(iconX, 24, 7, poolColor);
-    iconX -= 36;
-
-    // WiFi/WAN status
+    // WAN Status
     uint16_t wifiColor = data->wifiConnected ? COLOR_SUCCESS : COLOR_ERROR;
     s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(iconX - 6, 4);
+    s_tft.setCursor(wanLabelX, y + 12);
     s_tft.print("WAN");
-    s_tft.fillCircle(iconX, 24, 6, wifiColor);
-    s_tft.drawCircle(iconX, 24, 7, wifiColor);
+    s_tft.fillCircle(wanCircleX, y + 16, 6, wifiColor);
+
+    // POOL Status
+    uint16_t poolColor = data->poolConnected ? COLOR_SUCCESS : COLOR_ERROR;
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(poolLabelX, y + 12);
+    s_tft.print("POOL");
+    s_tft.fillCircle(poolCircleX, y + 16, 6, poolColor);
 }
 
 static void drawMiningScreen(const display_data_t *data) {
+    int w = display_get_width();
     int y = HEADER_HEIGHT + 8;
+    bool isPortrait = display_is_portrait();
 
     // Hashrate panel with glow effect
-    s_tft.fillRoundRect(MARGIN - 4, y - 4, SCREEN_W - 2*MARGIN + 8, 38, 4, COLOR_PANEL);
-    s_tft.drawRoundRect(MARGIN - 4, y - 4, SCREEN_W - 2*MARGIN + 8, 38, 4, COLOR_ACCENT);
+    s_tft.fillRoundRect(MARGIN - 4, y - 4, w - 2*MARGIN + 8, 38, 4, COLOR_PANEL);
+    s_tft.drawRoundRect(MARGIN - 4, y - 4, w - 2*MARGIN + 8, 38, 4, COLOR_ACCENT);
 
     s_tft.setTextSize(2);
     s_tft.setCursor(MARGIN + 4, y + 6);
@@ -269,10 +329,10 @@ static void drawMiningScreen(const display_data_t *data) {
     // Shares on right side of hashrate panel
     s_tft.setTextSize(1);
     s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(SCREEN_W - 100, y + 4);
+    s_tft.setCursor(w - 100, y + 4);
     s_tft.print("Shares");
     s_tft.setTextColor(COLOR_FG);
-    s_tft.setCursor(SCREEN_W - 100, y + 16);
+    s_tft.setCursor(w - 100, y + 16);
     String shares = String(data->sharesAccepted) + "/" + String(data->sharesAccepted + data->sharesRejected);
     s_tft.print(shares);
 
@@ -281,6 +341,11 @@ static void drawMiningScreen(const display_data_t *data) {
     s_tft.setTextSize(1);
 
     // Stats grid with panels
+    // Landscape: 3 cols x 2 rows
+    // Portrait:  2 cols x 3 rows
+    int cols = isPortrait ? 2 : 3;
+    int boxW = (w - (cols + 1) * MARGIN) / cols;
+
     struct { const char *label; String value; uint16_t color; } stats[] = {
         {"Best",     formatDifficulty(data->bestDifficulty), COLOR_SPARK1},
         {"Hashes",   formatNumber(data->totalHashes), COLOR_FG},
@@ -291,10 +356,9 @@ static void drawMiningScreen(const display_data_t *data) {
     };
 
     for (int i = 0; i < 6; i++) {
-        int col = i % 3;
-        int row = i / 3;
-        int boxW = (SCREEN_W - 4*MARGIN) / 3;
-        int x = MARGIN + col * (boxW + MARGIN/2);
+        int col = i % cols;
+        int row = i / cols;
+        int x = MARGIN + col * (boxW + MARGIN);
         int ly = y + row * (LINE_HEIGHT + 12);
 
         // Mini panel
@@ -309,11 +373,12 @@ static void drawMiningScreen(const display_data_t *data) {
         s_tft.print(stats[i].value);
     }
 
-    y += 2 * (LINE_HEIGHT + 12) + 8;
+    int gridRows = isPortrait ? 3 : 2;
+    y += gridRows * (LINE_HEIGHT + 12) + 8;
 
     // Pool info panel
-    s_tft.fillRoundRect(MARGIN - 4, y, SCREEN_W - 2*MARGIN + 8, 50, 4, COLOR_PANEL);
-    s_tft.drawRoundRect(MARGIN - 4, y, SCREEN_W - 2*MARGIN + 8, 50, 4, COLOR_SPARK2);
+    s_tft.fillRoundRect(MARGIN - 4, y, w - 2*MARGIN + 8, 50, 4, COLOR_PANEL);
+    s_tft.drawRoundRect(MARGIN - 4, y, w - 2*MARGIN + 8, 50, 4, COLOR_SPARK2);
 
     y += 6;
 
@@ -322,12 +387,16 @@ static void drawMiningScreen(const display_data_t *data) {
     s_tft.setCursor(MARGIN + 2, y);
     s_tft.print("Pool: ");
     s_tft.setTextColor(data->poolConnected ? COLOR_SUCCESS : COLOR_ERROR);
-    s_tft.print(data->poolName ? data->poolName : "Disconnected");
+    
+    // Truncate pool name if needed
+    String poolName = data->poolName ? data->poolName : "Disconnected";
+    if (isPortrait && poolName.length() > 12) poolName = poolName.substring(0, 10) + "..";
+    s_tft.print(poolName);
 
     // Pool workers on right
     if (data->poolWorkersTotal > 0) {
         s_tft.setTextColor(COLOR_SPARK1);
-        s_tft.setCursor(SCREEN_W - 90, y);
+        s_tft.setCursor(w - 90, y);
         s_tft.print(String(data->poolWorkersTotal) + " miners");
     }
 
@@ -343,7 +412,7 @@ static void drawMiningScreen(const display_data_t *data) {
     // Your workers on address
     if (data->poolWorkersAddress > 0) {
         s_tft.setTextColor(COLOR_DIM);
-        s_tft.setCursor(SCREEN_W - 90, y);
+        s_tft.setCursor(w - 90, y);
         s_tft.print("You: ");
         s_tft.setTextColor(COLOR_ACCENT);
         s_tft.print(String(data->poolWorkersAddress));
@@ -360,19 +429,22 @@ static void drawMiningScreen(const display_data_t *data) {
 
     // Ping on right
     s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(SCREEN_W - 90, y);
+    s_tft.setCursor(w - 90, y);
     s_tft.print("Ping: ");
     s_tft.setTextColor(COLOR_FG);
     s_tft.print(data->avgLatency);
     s_tft.print("ms");
+
+    drawBottomStatusBar(data);
 }
 
 static void drawStatsScreen(const display_data_t *data) {
+    int w = display_get_width();
     int y = HEADER_HEIGHT + 8;
 
     // BTC Price panel
-    s_tft.fillRoundRect(MARGIN - 4, y - 4, SCREEN_W - 2*MARGIN + 8, 38, 4, COLOR_PANEL);
-    s_tft.drawRoundRect(MARGIN - 4, y - 4, SCREEN_W - 2*MARGIN + 8, 38, 4, COLOR_SPARK1);
+    s_tft.fillRoundRect(MARGIN - 4, y - 4, w - 2*MARGIN + 8, 38, 4, COLOR_PANEL);
+    s_tft.drawRoundRect(MARGIN - 4, y - 4, w - 2*MARGIN + 8, 38, 4, COLOR_SPARK1);
 
     s_tft.setTextSize(2);
     s_tft.setCursor(MARGIN + 4, y + 6);
@@ -388,16 +460,16 @@ static void drawStatsScreen(const display_data_t *data) {
     // Block height on right
     s_tft.setTextSize(1);
     s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(SCREEN_W - 100, y + 4);
+    s_tft.setCursor(w - 100, y + 4);
     s_tft.print("Block");
     s_tft.setTextColor(COLOR_FG);
-    s_tft.setCursor(SCREEN_W - 100, y + 16);
+    s_tft.setCursor(w - 100, y + 16);
     s_tft.print(data->blockHeight > 0 ? String(data->blockHeight) : "---");
 
     y += 44;
 
     // Network stats panel
-    s_tft.fillRoundRect(MARGIN - 4, y, SCREEN_W - 2*MARGIN + 8, 60, 4, COLOR_PANEL);
+    s_tft.fillRoundRect(MARGIN - 4, y, w - 2*MARGIN + 8, 60, 4, COLOR_PANEL);
 
     y += 6;
     s_tft.setTextSize(1);
@@ -411,7 +483,7 @@ static void drawStatsScreen(const display_data_t *data) {
 
     // Fee on right
     s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(SCREEN_W - 90, y);
+    s_tft.setCursor(w - 90, y);
     s_tft.print("Fee: ");
     s_tft.setTextColor(COLOR_SPARK2);
     s_tft.print(data->halfHourFee > 0 ? String(data->halfHourFee) + " sat" : "---");
@@ -428,8 +500,8 @@ static void drawStatsScreen(const display_data_t *data) {
     y += 32;
 
     // Your mining panel
-    s_tft.fillRoundRect(MARGIN - 4, y, SCREEN_W - 2*MARGIN + 8, 55, 4, COLOR_PANEL);
-    s_tft.drawRoundRect(MARGIN - 4, y, SCREEN_W - 2*MARGIN + 8, 55, 4, COLOR_ACCENT);
+    s_tft.fillRoundRect(MARGIN - 4, y, w - 2*MARGIN + 8, 55, 4, COLOR_PANEL);
+    s_tft.drawRoundRect(MARGIN - 4, y, w - 2*MARGIN + 8, 55, 4, COLOR_ACCENT);
 
     y += 6;
 
@@ -440,7 +512,7 @@ static void drawStatsScreen(const display_data_t *data) {
     // Pool workers
     if (data->poolWorkersTotal > 0) {
         s_tft.setTextColor(COLOR_SPARK1);
-        s_tft.setCursor(SCREEN_W - 90, y);
+        s_tft.setCursor(w - 90, y);
         s_tft.print(String(data->poolWorkersTotal) + " on pool");
     }
 
@@ -462,27 +534,32 @@ static void drawStatsScreen(const display_data_t *data) {
 
     // Shares on right
     s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(SCREEN_W - 90, y);
+    s_tft.setCursor(w - 90, y);
     s_tft.print("Shares: ");
     s_tft.setTextColor(COLOR_FG);
     s_tft.print(String(data->sharesAccepted));
+
+    drawBottomStatusBar(data);
 }
 
 static void drawClockScreen(const display_data_t *data) {
+    int w = display_get_width();
+    int h = display_get_height();
+
     // Get current time
     struct tm timeinfo;
     if (!getLocalTime(&timeinfo)) {
         s_tft.setTextColor(COLOR_DIM);
         s_tft.setTextSize(2);
-        s_tft.setCursor(SCREEN_W / 2 - 60, SCREEN_H / 2 - 10);
+        s_tft.setCursor(w / 2 - 60, h / 2 - 10);
         s_tft.print("No Time");
         return;
     }
 
     // Time panel
     int y = HEADER_HEIGHT + 20;
-    s_tft.fillRoundRect(MARGIN - 4, y - 4, SCREEN_W - 2*MARGIN + 8, 60, 6, COLOR_PANEL);
-    s_tft.drawRoundRect(MARGIN - 4, y - 4, SCREEN_W - 2*MARGIN + 8, 60, 6, COLOR_ACCENT);
+    s_tft.fillRoundRect(MARGIN - 4, y - 4, w - 2*MARGIN + 8, 60, 6, COLOR_PANEL);
+    s_tft.drawRoundRect(MARGIN - 4, y - 4, w - 2*MARGIN + 8, 60, 6, COLOR_ACCENT);
 
     // Large time display
     char timeStr[16];
@@ -490,7 +567,8 @@ static void drawClockScreen(const display_data_t *data) {
 
     s_tft.setTextColor(COLOR_ACCENT);
     s_tft.setTextSize(4);
-    s_tft.setCursor(SCREEN_W / 2 - 96, y + 10);
+    // Center text approximation (4 chars * 6px * 4 scale = 96px for "HH:MM")
+    s_tft.setCursor(w / 2 - 96, y + 10);
     s_tft.print(timeStr);
 
     y += 70;
@@ -501,12 +579,12 @@ static void drawClockScreen(const display_data_t *data) {
 
     s_tft.setTextColor(COLOR_FG);
     s_tft.setTextSize(2);
-    s_tft.setCursor(SCREEN_W / 2 - 90, y);
+    s_tft.setCursor(w / 2 - 90, y);
     s_tft.print(dateStr);
 
     // Mining summary panel at bottom
-    y = SCREEN_H - 55;
-    s_tft.fillRoundRect(MARGIN - 4, y, SCREEN_W - 2*MARGIN + 8, 50, 4, COLOR_PANEL);
+    y = h - (display_is_portrait() ? 90 : 55);
+    s_tft.fillRoundRect(MARGIN - 4, y, w - 2*MARGIN + 8, 50, 4, COLOR_PANEL);
 
     y += 8;
     s_tft.setTextSize(1);
@@ -521,7 +599,7 @@ static void drawClockScreen(const display_data_t *data) {
     // BTC price on right
     if (data->btcPrice > 0) {
         s_tft.setTextColor(COLOR_SPARK1);
-        s_tft.setCursor(SCREEN_W - 85, y);
+        s_tft.setCursor(w - 85, y);
         s_tft.print("$");
         s_tft.print(String(data->btcPrice, 0));
     }
@@ -538,11 +616,13 @@ static void drawClockScreen(const display_data_t *data) {
     // Block height on right
     if (data->blockHeight > 0) {
         s_tft.setTextColor(COLOR_DIM);
-        s_tft.setCursor(SCREEN_W - 85, y);
+        s_tft.setCursor(w - 85, y);
         s_tft.print("Blk ");
         s_tft.setTextColor(COLOR_FG);
         s_tft.print(String(data->blockHeight));
     }
+
+    drawBottomStatusBar(data);
 }
 
 // ============================================================
@@ -567,14 +647,16 @@ void display_init(uint8_t rotation, uint8_t brightness) {
 
     // Show boot screen with spark logo
     s_tft.fillScreen(COLOR_BG);
+    int w = s_tft.width();
+    int h = s_tft.height();
 
     // Draw large spark logo in center
-    drawSparkLogo(SCREEN_W/2 - 40, 40, 80);
+    drawSparkLogo(w/2 - 40, 40, 80);
 
     // Title with spark gradient
     s_tft.setTextSize(3);
     s_tft.setTextColor(COLOR_ACCENT);
-    s_tft.setCursor(55, 130);
+    s_tft.setCursor(w/2 - 90, 130);
     s_tft.print("Spark");
     s_tft.setTextColor(COLOR_SPARK1);
     s_tft.print("Miner");
@@ -582,28 +664,27 @@ void display_init(uint8_t rotation, uint8_t brightness) {
     // Major version badge (large)
     s_tft.setTextSize(2);
     s_tft.setTextColor(COLOR_SPARK2);
-    s_tft.setCursor(115, 158);
+    s_tft.setCursor(w/2 - 30, 158);
     s_tft.print("V");
     s_tft.print(getMajorVersion());
 
     // Full version
     s_tft.setTextColor(COLOR_DIM);
     s_tft.setTextSize(1);
-    s_tft.setCursor(155, 162);
+    s_tft.setCursor(w/2 + 10, 162);
     s_tft.print("(" AUTO_VERSION ")");
 
-    // Tagline
-    s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(70, 185);
-    s_tft.print("A tiny spark of mining power");
+    // Tagline (only if space permits)
+    if (h >= 240) {
+        s_tft.setTextColor(COLOR_DIM);
+        s_tft.setCursor(w/2 - 75, 185);
+        s_tft.print("A tiny spark of mining power");
 
-    // Credits
-    s_tft.setTextColor(COLOR_SPARK2);
-    s_tft.setCursor(120, 210);
-    s_tft.print("by Sneeze");
-    s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(75, 225);
-    s_tft.print("github.com/SneezeGUI");
+        // Credits
+        s_tft.setTextColor(COLOR_SPARK2);
+        s_tft.setCursor(w/2 - 30, 210);
+        s_tft.print("by Sneeze");
+    }
 
     delay(2000);
 
@@ -682,12 +763,12 @@ void display_redraw() {
 }
 
 uint8_t display_flip_rotation() {
-    // Flip 180 degrees: 0<->2, 1<->3
-    s_rotation = (s_rotation + 2) % 4;
+    // Cycle all 4 rotations: 0->1->2->3->0
+    s_rotation = (s_rotation + 1) % 4;
     s_tft.setRotation(s_rotation);
     s_tft.fillScreen(COLOR_BG);
     s_needsRedraw = true;
-    Serial.printf("[DISPLAY] Screen flipped, rotation=%d\n", s_rotation);
+    Serial.printf("[DISPLAY] Screen rotated, rotation=%d\n", s_rotation);
     return s_rotation;
 }
 
@@ -698,25 +779,33 @@ void display_set_inverted(bool inverted) {
 
 void display_show_reset_countdown(int seconds) {
     s_tft.fillScreen(COLOR_BG);
+    int w = s_tft.width();
+    int h = s_tft.height();
+    
     s_tft.setTextColor(COLOR_ERROR);  // Red
     s_tft.setTextSize(6);
-    s_tft.setCursor(145, 80);
+    s_tft.setCursor(w/2 - 18, h/2 - 40);
     s_tft.print(seconds);
+    
     s_tft.setTextSize(2);
     s_tft.setTextColor(COLOR_FG);  // White
-    s_tft.setCursor(70, 150);
+    s_tft.setCursor(w/2 - 75, h/2 + 30);
     s_tft.print("Factory Reset");
+    
     s_tft.setTextSize(1);
     s_tft.setTextColor(COLOR_DIM);  // Dim
-    s_tft.setCursor(60, 180);
+    s_tft.setCursor(w/2 - 65, h/2 + 60);
     s_tft.print("Release button to cancel");
 }
 
 void display_show_reset_complete() {
     s_tft.fillScreen(COLOR_BG);
+    int w = s_tft.width();
+    int h = s_tft.height();
+    
     s_tft.setTextColor(COLOR_SUCCESS);  // Green
     s_tft.setTextSize(2);
-    s_tft.setCursor(80, 100);
+    s_tft.setCursor(w/2 - 65, h/2 - 10);
     s_tft.print("Resetting...");
 }
 
@@ -733,10 +822,11 @@ void display_handle_touch() {
 
 void display_show_ap_config(const char *ssid, const char *password, const char *ip) {
     s_tft.fillScreen(COLOR_BG);
+    int w = s_tft.width();
 
     s_tft.setTextColor(COLOR_ACCENT);
     s_tft.setTextSize(2);
-    s_tft.setCursor(60, 20);
+    s_tft.setCursor(w/2 - 60, 20);
     s_tft.print("WiFi Setup");
 
     s_tft.setTextColor(COLOR_FG);
