@@ -102,6 +102,8 @@ Create a `config.json` file on a FAT32-formatted microSD card:
 | `worker_name` | No | `SparkMiner` | Identifier shown on pool dashboard |
 | `pool_password` | No | `x` | Pool password (usually `x`) |
 | `brightness` | No | `100` | Display brightness (0-100) |
+| `rotation` | No | `1` | Screen rotation (0-3) |
+| `invert_colors` | No | `false` | Invert display colors |
 | `backup_pool_url` | No | - | Failover pool hostname |
 | `backup_pool_port` | No | - | Failover pool port |
 | `backup_wallet` | No | - | Wallet for backup pool |
@@ -118,7 +120,8 @@ If no SD card config is found, SparkMiner creates a WiFi access point:
 ### 3. NVS (Non-Volatile Storage)
 
 Configuration is automatically saved to flash memory after first successful setup. To reset:
-- Hold the BOOT button for 10 seconds during startup, OR
+- Long-press BOOT button (1.5s) during operation for 3-second countdown reset, OR
+- Hold BOOT button for 5 seconds at power-on, OR
 - Reflash the firmware
 
 ---
@@ -146,9 +149,25 @@ SparkMiner supports all standard Bitcoin address formats:
 
 ---
 
+## Button Controls
+
+The BOOT button (closest to USB-C) provides these actions:
+
+| Action | Function | Notes |
+|--------|----------|-------|
+| **Single click** | Cycle screens | Mining → Stats → Clock |
+| **Double click** | Flip screen 180° | Rotation saved to NVS |
+| **Triple click** | Toggle color inversion | Saved to NVS |
+| **Long press (1.5s)** | Factory reset | 3-second countdown, release to cancel |
+| **Hold at boot (5s)** | Factory reset | Alternative if UI is unresponsive |
+
+> **Note:** Buttons remain responsive during mining thanks to a dedicated FreeRTOS task.
+
+---
+
 ## Display Screens
 
-SparkMiner has 3 display screens. Tap the screen or press BOOT to cycle:
+SparkMiner has 3 display screens. Press BOOT to cycle:
 
 ### Screen 1: Mining Status (Default)
 
@@ -208,14 +227,14 @@ This dual-core approach maximizes hashrate while maintaining responsive UI and n
 |---------|----------|
 | Won't connect to WiFi | Check SSID/password, ensure 2.4GHz network (not 5GHz) |
 | Keeps disconnecting | Move closer to router, check for interference |
-| AP mode not appearing | Hold BOOT button 10s during startup to reset |
+| AP mode not appearing | Hold BOOT 5s at power-on, or long-press during operation |
 
 ### Display Issues
 
 | Problem | Solution |
 |---------|----------|
 | White/blank screen | Try `esp32-2432s028-st7789` environment |
-| Inverted colors | Display driver mismatch, try alternate environment |
+| Inverted colors | Triple-click to toggle, or set `invert_colors` in config.json |
 | Flickering | Reduce SPI frequency in platformio.ini |
 
 ### Mining Issues
