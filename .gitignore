@@ -22,3 +22,5 @@ Thumbs.db
 
 # Local config (sensitive)
 config.json
+# Development/test firmware builds
+dev-firmware/
