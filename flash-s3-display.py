@@ -106,23 +106,6 @@ def get_script_dir():
     """Get the directory where this script is located"""
     return Path(__file__).parent.resolve()
 
-def get_pio_path():
-    """Get the path to PlatformIO executable"""
-    script_dir = get_script_dir()
-    venv_pio = script_dir / ".venv" / "Scripts" / "pio.exe"
-    if venv_pio.exists():
-        return str(venv_pio)
-
-    # Try system PlatformIO
-    try:
-        result = subprocess.run(["pio", "--version"], capture_output=True)
-        if result.returncode == 0:
-            return "pio"
-    except FileNotFoundError:
-        pass
-
-    return None
-
 def get_python_path():
     """Get the path to Python executable in venv"""
     script_dir = get_script_dir()
@@ -130,6 +113,19 @@ def get_python_path():
     if venv_python.exists():
         return str(venv_python)
     return sys.executable
+
+def get_pio_cmd():
+    """Get the PlatformIO command as a list (uses python -m platformio to avoid launcher issues)"""
+    python_path = get_python_path()
+    return [python_path, "-m", "platformio"]
+
+def check_pio_installed():
+    """Check if PlatformIO is installed"""
+    try:
+        result = subprocess.run(get_pio_cmd() + ["--version"], capture_output=True, text=True)
+        return result.returncode == 0
+    except Exception:
+        return False
 
 def run_command(cmd, description=None, capture=False):
     """Run a command and handle output"""
@@ -152,12 +148,11 @@ def run_command(cmd, description=None, capture=False):
 
 def list_serial_ports():
     """List available serial ports"""
-    pio = get_pio_path()
-    if not pio:
+    if not check_pio_installed():
         print(f"{color('[ERROR]', Colors.RED)} PlatformIO not found!")
         return []
 
-    result = run_command([pio, "device", "list", "--serial"], capture=True)
+    result = run_command(get_pio_cmd() + ["device", "list", "--serial"], capture=True)
     if not result or result.returncode != 0:
         return []
 
@@ -261,8 +256,7 @@ def check_firmware_exists():
 
 def build_firmware():
     """Build the firmware"""
-    pio = get_pio_path()
-    if not pio:
+    if not check_pio_installed():
         print(f"{color('[ERROR]', Colors.RED)} PlatformIO not found!")
         return False
 
@@ -273,7 +267,7 @@ def build_firmware():
     print(f"  Chip: {CHIP}")
     print(f"{color('=' * 60, Colors.CYAN)}\n")
 
-    result = run_command([pio, "run", "-e", ENV_NAME])
+    result = run_command(get_pio_cmd() + ["run", "-e", ENV_NAME])
 
     if result and result.returncode == 0:
         print(f"\n{color('[SUCCESS]', Colors.GREEN)} Build completed successfully!")
@@ -364,8 +358,7 @@ def open_monitor(port, after_flash=False):
         print(f"{color('[ERROR]', Colors.RED)} No port specified!")
         return
 
-    pio = get_pio_path()
-    if not pio:
+    if not check_pio_installed():
         print(f"{color('[ERROR]', Colors.RED)} PlatformIO not found!")
         return
 
@@ -381,7 +374,7 @@ def open_monitor(port, after_flash=False):
     print(f"  Exit: Ctrl+C")
     print(f"{color('=' * 60, Colors.CYAN)}\n")
 
-    run_command([pio, "device", "monitor", "-b", str(MONITOR_BAUD), "-p", port])
+    run_command(get_pio_cmd() + ["device", "monitor", "-b", str(MONITOR_BAUD), "-p", port])
 
 def interactive_menu():
     """Show interactive menu"""
@@ -439,9 +432,8 @@ def interactive_menu():
             print("-" * 40)
 
         elif choice == "6":
-            pio = get_pio_path()
-            if pio:
-                run_command([pio, "run", "-e", ENV_NAME, "-t", "clean"], "Cleaning build...")
+            if check_pio_installed():
+                run_command(get_pio_cmd() + ["run", "-e", ENV_NAME, "-t", "clean"], "Cleaning build...")
                 print(f"{color('[SUCCESS]', Colors.GREEN)} Build cleaned!")
 
         elif choice == "0":
@@ -481,8 +473,7 @@ Examples:
     print_banner()
 
     # Check PlatformIO
-    pio = get_pio_path()
-    if not pio:
+    if not check_pio_installed():
         print(f"{color('[ERROR]', Colors.RED)} PlatformIO not found!")
         print("\nInstall with: pip install platformio")
         print("Or activate venv: .venv\\Scripts\\activate")
@@ -492,7 +483,7 @@ Examples:
 
     # Handle command-line arguments
     if args.clean:
-        run_command([pio, "run", "-e", ENV_NAME, "-t", "clean"], "Cleaning build...")
+        run_command(get_pio_cmd() + ["run", "-e", ENV_NAME, "-t", "clean"], "Cleaning build...")
         return
 
     if args.build or args.all:
