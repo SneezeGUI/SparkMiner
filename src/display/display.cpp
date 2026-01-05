@@ -30,6 +30,11 @@
     #define TOUCH_CLK_PIN   25
 #endif
 
+// S3 CYD / Waveshare ESP32-S3-Touch-LCD-2.8 specific pins
+#if defined(ESP32_S3_CYD)
+    #define LCD_BL_PIN      45
+#endif
+
 // PWM settings for backlight
 #define LEDC_CHANNEL    0
 #define LEDC_FREQ       5000
@@ -684,6 +689,35 @@ uint8_t display_flip_rotation() {
     s_needsRedraw = true;
     Serial.printf("[DISPLAY] Screen flipped, rotation=%d\n", s_rotation);
     return s_rotation;
+}
+
+void display_set_inverted(bool inverted) {
+    s_tft.invertDisplay(inverted);
+    Serial.printf("[DISPLAY] Color inversion %s\n", inverted ? "enabled" : "disabled");
+}
+
+void display_show_reset_countdown(int seconds) {
+    s_tft.fillScreen(COLOR_BG);
+    s_tft.setTextColor(COLOR_ERROR);  // Red
+    s_tft.setTextSize(6);
+    s_tft.setCursor(145, 80);
+    s_tft.print(seconds);
+    s_tft.setTextSize(2);
+    s_tft.setTextColor(COLOR_FG);  // White
+    s_tft.setCursor(70, 150);
+    s_tft.print("Factory Reset");
+    s_tft.setTextSize(1);
+    s_tft.setTextColor(COLOR_DIM);  // Dim
+    s_tft.setCursor(60, 180);
+    s_tft.print("Release button to cancel");
+}
+
+void display_show_reset_complete() {
+    s_tft.fillScreen(COLOR_BG);
+    s_tft.setTextColor(COLOR_SUCCESS);  // Green
+    s_tft.setTextSize(2);
+    s_tft.setCursor(80, 100);
+    s_tft.print("Resetting...");
 }
 
 bool display_touched() {

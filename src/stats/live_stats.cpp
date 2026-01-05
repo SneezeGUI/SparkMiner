@@ -55,9 +55,13 @@ static bool fetchJson(const char *url, DynamicJsonDocument &doc) {
     bool isHttps = strncmp(url, "https://", 8) == 0;
     bool beginResult = false;
 
+    // Track allocated clients for cleanup
+    WiFiClientSecure *secureClient = nullptr;
+    WiFiClient *plainClient = nullptr;
+
     if (isHttps) {
         // Use secure client for HTTPS
-        WiFiClientSecure *secureClient = new WiFiClientSecure();
+        secureClient = new WiFiClientSecure();
         secureClient->setInsecure();
         secureClient->setTimeout(10000);
         beginResult = http.begin(*secureClient, url);
@@ -68,32 +72,36 @@ static bool fetchJson(const char *url, DynamicJsonDocument &doc) {
         }
     } else {
         // Use regular client for HTTP (avoids hardware SHA conflicts)
-        WiFiClient *client = new WiFiClient();
-        client->setTimeout(10000);
-        beginResult = http.begin(*client, url);
+        plainClient = new WiFiClient();
+        plainClient->setTimeout(10000);
+        beginResult = http.begin(*plainClient, url);
         if (!beginResult) {
-            delete client;
+            delete plainClient;
             return false;
         }
     }
 
     int httpCode = http.GET();
+    bool success = false;
+
     if (httpCode > 0) {
         if (httpCode == HTTP_CODE_OK) {
             String payload = http.getString();
             DeserializationError err = deserializeJson(doc, payload);
-            http.end();
-            if (err) {
-                return false;
+            if (!err) {
+                success = true;
             }
-            return true;
         }
     } else if (isHttps) {
         logSSLError("request", httpCode);
     }
 
+    // Always cleanup: end HTTP and delete allocated client
     http.end();
-    return false;
+    if (secureClient) delete secureClient;
+    if (plainClient) delete plainClient;
+
+    return success;
 }
 
 // ============================================================

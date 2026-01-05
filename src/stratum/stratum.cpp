@@ -291,7 +291,7 @@ static void handleServerMessage(WiFiClient &client) {
 // Handles method calls (set_difficulty, notify) that arrive before the response
 static bool waitForResponseById(WiFiClient &client, uint32_t expectedId, String &outResponse, int maxAttempts = 10) {
     for (int attempt = 0; attempt < maxAttempts; attempt++) {
-        String line = client.readStringUntil('\n');
+        String line = readBoundedLine(client);  // Use bounded read to prevent OOM
         line.trim();
 
         if (line.length() == 0) {

@@ -118,6 +118,23 @@ void display_handle_touch();
  */
 void display_show_ap_config(const char *ssid, const char *password, const char *ip);
 
+/**
+ * Set display color inversion
+ * @param inverted true to invert colors, false for normal
+ */
+void display_set_inverted(bool inverted);
+
+/**
+ * Show factory reset countdown
+ * @param seconds Seconds remaining (3, 2, 1)
+ */
+void display_show_reset_countdown(int seconds);
+
+/**
+ * Show factory reset complete message
+ */
+void display_show_reset_complete();
+
 #else
 
 // Stub functions for headless builds
@@ -132,6 +149,9 @@ static inline uint8_t display_flip_rotation() { return 0; }
 static inline bool display_touched() { return false; }
 static inline void display_handle_touch() {}
 static inline void display_show_ap_config(const char *ssid, const char *password, const char *ip) {}
+static inline void display_set_inverted(bool inverted) {}
+static inline void display_show_reset_countdown(int seconds) {}
+static inline void display_show_reset_complete() {}
 
 #endif // USE_DISPLAY
 

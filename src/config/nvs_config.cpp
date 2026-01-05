@@ -7,20 +7,27 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
-#include <SD.h>
-#include <SPI.h>
 #include <ArduinoJson.h>
 #include <board_config.h>
 #include "nvs_config.h"
 #include "../stratum/stratum_types.h"
 
+// SD card support - use SD_MMC for ESP32-S3 CYD, SPI SD for others
+#ifdef USE_SD_MMC
+    #include <SD_MMC.h>
+    #define SD_FS SD_MMC
+#else
+    #include <SD.h>
+    #include <SPI.h>
+    #define SD_FS SD
+    // SD card CS pin for SPI mode
+    #ifndef SD_CS_PIN
+        #define SD_CS_PIN 5
+    #endif
+#endif
+
 // Config file path on SD card
 #define CONFIG_FILE_PATH "/config.json"
-
-// SD card pins for CYD boards
-#ifndef SD_CS_PIN
-    #define SD_CS_PIN 5
-#endif
 
 // NVS namespace
 #define NVS_NAMESPACE "sparkminer"
@@ -67,22 +74,66 @@ static void safeStrCpy(char *dest, const char *src, size_t maxLen) {
  * It's only read when NVS has no valid config (first boot or reset).
  */
 static bool loadConfigFromFile(miner_config_t *config) {
+    Serial.println("[CONFIG] Attempting to load config from SD card...");
+    
     // Initialize SD card
+#ifdef USE_SD_MMC
+    // ESP32-S3 FNK0104 uses SD_MMC 4-bit interface (Freenove driver approach)
+    Serial.println("[CONFIG] Setting up SD_MMC (Freenove FNK0104)...");
+    Serial.print("[CONFIG] SD Pins - CLK:"); Serial.print(SD_MMC_CLK);
+        Serial.print(" CMD:"); Serial.print(SD_MMC_CMD);
+        Serial.print(" D0:"); Serial.print(SD_MMC_D0);
+        Serial.print(" D1:"); Serial.print(SD_MMC_D1);
+        Serial.print(" D2:"); Serial.print(SD_MMC_D2);
+        Serial.print(" D3:"); Serial.print(SD_MMC_D3);
+        Serial.print(" Freq:"); Serial.println(BOARD_MAX_SDMMC_FREQ);
+    SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
+    
+    // Give SD card time to power up
+    delay(100);
+    
+    // Try 4-bit mode first
+    Serial.println("[CONFIG] Trying SD_MMC 4-bit mode...");
+    if (!SD_MMC.begin("/sdcard", false, false, BOARD_MAX_SDMMC_FREQ, 5)) {
+        Serial.println("[CONFIG] 4-bit failed, trying 1-bit mode @ 4MHz...");
+        SD_MMC.end();  // Clean up before retry
+        delay(100);
+        if (!SD_MMC.begin("/sdcard", true, false, 4000, 5)) {
+            Serial.println("[CONFIG] 1-bit failed, trying 1-bit @ 1MHz...");
+            SD_MMC.end();
+            delay(100);
+            if (!SD_MMC.begin("/sdcard", true, false, 1000, 5)) {
+                Serial.println("[CONFIG] SD_MMC card not found or failed to mount");
+                Serial.println("[CONFIG] Check: card inserted? FAT32? contacts clean?");
+                return false;
+            }
+        }
+    }
+    uint8_t cardType = SD_MMC.cardType();
+    if (cardType == 0) {
+        Serial.println("[CONFIG] No SD card detected");
+        return false;
+    }
+    Serial.print("[CONFIG] Card type: "); Serial.println(cardType);
+    Serial.printf("[CONFIG] SD_MMC Card Size: %lluMB\n", SD_MMC.cardSize() / (1024 * 1024));
+    Serial.println("[CONFIG] SD_MMC initialized successfully");
+#else
     if (!SD.begin(SD_CS_PIN)) {
         Serial.println("[CONFIG] SD card not found or failed to mount");
         return false;
     }
+#endif
 
-    if (!SD.exists(CONFIG_FILE_PATH)) {
+    if (!SD_FS.exists(CONFIG_FILE_PATH)) {
         Serial.println("[CONFIG] No config.json on SD card");
-        SD.end();
+        SD_FS.end();
         return false;
     }
 
-    File file = SD.open(CONFIG_FILE_PATH, "r");
+    File file = SD_FS.open(CONFIG_FILE_PATH, "r");
     if (!file) {
         Serial.println("[CONFIG] Failed to open config.json");
-        SD.end();
+        SD_FS.end();
         return false;
     }
 
@@ -91,7 +142,7 @@ static bool loadConfigFromFile(miner_config_t *config) {
     StaticJsonDocument<1024> doc;
     DeserializationError err = deserializeJson(doc, file);
     file.close();
-    SD.end();
+    SD_FS.end();
 
     if (err) {
         Serial.printf("[CONFIG] JSON parse error: %s\n", err.c_str());
@@ -137,6 +188,12 @@ static bool loadConfigFromFile(miner_config_t *config) {
     // Display settings (optional)
     if (doc.containsKey("brightness")) {
         config->brightness = doc["brightness"];
+    }
+    if (doc.containsKey("invert_colors")) {
+        config->invertColors = doc["invert_colors"];
+    }
+    if (doc.containsKey("rotation")) {
+        config->rotation = doc["rotation"];
     }
 
     // Config file stays on SD card - NOT deleted
@@ -256,6 +313,7 @@ void nvs_config_reset(miner_config_t *config) {
     config->screenTimeout = 0;  // Never timeout
     config->rotation = 1;       // Landscape (default)
     config->displayEnabled = true;
+    config->invertColors = false;  // Normal colors
 
     // Miner defaults
     safeStrCpy(config->workerName, "hybrid", sizeof(config->workerName));

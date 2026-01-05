@@ -12,6 +12,7 @@
 #include <WiFi.h>
 #include <esp_task_wdt.h>
 #include <esp_pm.h>
+#include <Preferences.h>
 #include <OneButton.h>
 
 #include <board_config.h>
@@ -28,6 +29,7 @@ TaskHandle_t miner0Task = NULL;
 TaskHandle_t miner1Task = NULL;
 TaskHandle_t stratumTask = NULL;
 TaskHandle_t monitorTask = NULL;
+TaskHandle_t buttonTask = NULL;
 
 // Global state
 volatile bool systemReady = false;
@@ -43,11 +45,80 @@ void onButtonClick() {
 
 // Double click: flip screen 180°
 void onButtonDoubleClick() {
+    Serial.println("[BUTTON] Double-click detected - flipping screen");
     uint8_t newRotation = display_flip_rotation();
     // Save to NVS
     miner_config_t *config = nvs_config_get();
     config->rotation = newRotation;
     nvs_config_save(config);
+    Serial.printf("[BUTTON] New rotation saved: %d\n", newRotation);
+}
+
+// Triple click: toggle color inversion
+void onButtonMultiClick() {
+    int clicks = button.getNumberClicks();
+    if (clicks == 3) {
+        Serial.println("[BUTTON] Triple-click detected - toggling color inversion");
+        miner_config_t *config = nvs_config_get();
+        config->invertColors = !config->invertColors;
+        display_set_inverted(config->invertColors);
+        nvs_config_save(config);
+        Serial.printf("[BUTTON] Color inversion %s and saved\n", config->invertColors ? "enabled" : "disabled");
+    }
+}
+
+// Long press: factory reset with 3-second visual countdown
+void onButtonLongPressStart() {
+    Serial.println("[RESET] Long press detected - starting countdown...");
+
+    // Visual countdown on display
+    for (int i = 3; i > 0; i--) {
+        display_show_reset_countdown(i);
+
+        delay(1000);
+
+        // Check if button released early
+        if (digitalRead(BUTTON_PIN) == HIGH) {
+            Serial.println("[RESET] Cancelled - button released");
+            display_redraw();  // Trigger redraw of normal screen
+            return;
+        }
+    }
+
+    Serial.println("[RESET] *** FACTORY RESET TRIGGERED ***");
+
+    // Show reset message
+    display_show_reset_complete();
+
+    // Clear NVS
+    Preferences prefs;
+    if (prefs.begin("sparkminer", false)) {
+        prefs.clear();
+        prefs.end();
+        Serial.println("[RESET] NVS cleared");
+    }
+
+    // Clear WiFi settings
+    WiFi.disconnect(true, true);
+    Serial.println("[RESET] WiFi settings cleared");
+
+    delay(500);
+    Serial.println("[RESET] Restarting...");
+    ESP.restart();
+}
+#endif
+
+#if defined(BUTTON_PIN) && USE_DISPLAY
+/**
+ * Dedicated button handling task
+ * Runs at higher priority than mining to ensure responsive UI
+ */
+void button_task(void *param) {
+    Serial.println("[BUTTON] Task started on core 0");
+    for (;;) {
+        button.tick();
+        vTaskDelay(pdMS_TO_TICKS(10));  // 10ms polling = responsive buttons
+    }
 }
 #endif
 
@@ -55,13 +126,82 @@ void onButtonDoubleClick() {
 void setupPowerManagement();
 void setupTasks();
 void printBanner();
+void checkFactoryReset();
+
+/**
+ * Check if boot button is held for factory reset
+ * Hold BOOT button for 5+ seconds to wipe NVS and restart
+ */
+void checkFactoryReset() {
+    #ifdef BUTTON_PIN
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+    // Check if button is pressed at boot
+    if (digitalRead(BUTTON_PIN) == LOW) {
+        Serial.println();
+        Serial.println("[RESET] Boot button held - hold for 5 seconds to factory reset...");
+
+        unsigned long startTime = millis();
+        int lastSecond = -1;
+
+        while (digitalRead(BUTTON_PIN) == LOW) {
+            unsigned long elapsed = millis() - startTime;
+            int seconds = elapsed / 1000;
+
+            // Print countdown
+            if (seconds != lastSecond && seconds <= 5) {
+                Serial.print("[RESET] "); Serial.print(5 - seconds); Serial.println(" seconds...");
+                lastSecond = seconds;
+            }
+
+            // Check if 5 seconds have passed
+            if (elapsed >= 5000) {
+                Serial.println();
+                Serial.println("[RESET] *** FACTORY RESET TRIGGERED ***");
+                Serial.println("[RESET] Clearing all configuration...");
+
+                // Clear NVS
+                Preferences prefs;
+                if (prefs.begin("sparkminer", false)) {
+                    prefs.clear();
+                    prefs.end();
+                }
+
+                // Also reset WiFiManager settings
+                WiFi.disconnect(true, true);
+
+                Serial.println("[RESET] Configuration cleared. Restarting...");
+                delay(1000);
+                ESP.restart();
+            }
+
+            delay(100);
+        }
+
+        // Button released before 5 seconds
+        Serial.println("[RESET] Button released - normal boot continuing...");
+        Serial.println();
+    }
+    #endif
+}
 
 /**
  * Arduino setup - runs once at boot
  */
 void setup() {
     Serial.begin(115200);
-    delay(1000);
+    
+    // Wait for USB CDC to be ready
+    delay(3000);
+    while (!Serial) { delay(10); }  // Extra wait for USB enumeration
+    Serial.flush();
+    
+    // Debug output  
+    Serial.println();
+    Serial.println("[BOOT] Starting...");
+
+    // Check for factory reset (hold BOOT button for 5 seconds)
+    checkFactoryReset();
 
     printBanner();
 
@@ -91,15 +231,19 @@ void setup() {
     // Initialize display early (needed for WiFi setup screen)
     #if USE_DISPLAY
         display_init(config->rotation, config->brightness);
+        display_set_inverted(config->invertColors);
     #endif
 
     // Setup button handlers (OneButton)
     #if defined(BUTTON_PIN) && USE_DISPLAY
-        button.setClickTicks(400);       // Time window for single click (ms)
-        button.setPressTicks(800);       // Time for long press to start (ms)
-        button.setDebounceTicks(50);     // Debounce time (ms)
+        button.setClickMs(400);          // Time window for single click (ms)
+        button.setPressMs(1500);         // Time for long press to start (1.5s)
+        button.setDebounceMs(50);        // Debounce time (ms)
         button.attachClick(onButtonClick);
         button.attachDoubleClick(onButtonDoubleClick);
+        button.attachMultiClick(onButtonMultiClick);          // Triple-click for inversion
+        button.attachLongPressStart(onButtonLongPressStart);  // Factory reset handler
+        Serial.println("[INIT] Button handlers registered (click/double/triple/long-press)");
     #endif
 
     // Initialize WiFiManager and connect
@@ -146,13 +290,9 @@ void setup() {
  * Minimal work here - most work done in FreeRTOS tasks
  */
 void loop() {
-    // Handle button with OneButton (single click = next screen, double click = flip)
-    #if defined(BUTTON_PIN) && USE_DISPLAY
-        button.tick();
-    #endif
-
+    // Button handling moved to dedicated FreeRTOS task for responsiveness during mining
     // Yield to FreeRTOS tasks
-    delay(5);  // Fast tick for responsive button handling
+    vTaskDelay(pdMS_TO_TICKS(100));  // Main loop can sleep longer now
 }
 
 /**
@@ -206,6 +346,20 @@ void setupTasks() {
         &monitorTask,
         MONITOR_CORE
     );
+
+    // Button task (responsive UI during mining)
+    // Needs 4KB+ stack for NVS writes (rotation save) and display updates
+    #if defined(BUTTON_PIN) && USE_DISPLAY
+        xTaskCreatePinnedToCore(
+            button_task,
+            "Button",
+            4096,           // 4KB stack for NVS/flash operations in handlers
+            NULL,
+            5,              // Priority 5: above miner0 (1), below miner1 (19)
+            &buttonTask,
+            0               // Core 0 with other UI tasks
+        );
+    #endif
 
     // Only create miner tasks if wallet is configured
     if (hasValidConfig) {

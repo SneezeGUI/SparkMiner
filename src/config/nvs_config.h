@@ -37,6 +37,7 @@ typedef struct {
     uint8_t screenTimeout;
     uint8_t rotation;       // Screen rotation (0-3)
     bool displayEnabled;
+    bool invertColors;      // Invert display colors
 
     // Miner settings
     char workerName[32];

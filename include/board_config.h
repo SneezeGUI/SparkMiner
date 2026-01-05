@@ -73,6 +73,38 @@
     // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
 
 // ============================================================
+// ESP32-S3-CYD - Cheap Yellow Display (S3 Single USB)
+// ============================================================
+#elif defined(ESP32_S3_CYD)
+    #define BOARD_NAME "ESP32-S3-CYD"
+
+    // Display
+    #ifndef USE_DISPLAY
+        #define USE_DISPLAY 1
+    #endif
+    #define DISPLAY_TYPE_TFT 1
+    #define TFT_WIDTH 320
+    #define TFT_HEIGHT 240
+
+    // LED
+    #ifndef LED_PIN
+        #define LED_PIN 4
+    #endif
+
+    // Backlight (Waveshare ESP32-S3-Touch-LCD-2.8)
+    #ifndef TFT_BL_PIN
+        #define TFT_BL_PIN 45
+    #endif
+
+    // Button
+    #ifndef BUTTON_PIN
+        #define BUTTON_PIN 0
+    #endif
+    #define BUTTON_ACTIVE_LOW 1
+
+    // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
+
+// ============================================================
 // ESP32-S3 DevKit - Hardware SHA
 // ============================================================
 #elif defined(ESP32_S3_DEVKIT) || defined(ESP32_S3_MINI)

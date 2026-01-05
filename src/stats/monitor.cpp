@@ -184,6 +184,12 @@ void monitor_task(void *param) {
                         displayData.halfHourFee);
                 }
 
+                // Heap monitoring - warn if low memory (below 50KB)
+                uint32_t freeHeap = ESP.getFreeHeap();
+                if (freeHeap < 50000) {
+                    Serial.printf("[HEAP] WARNING: Low memory - %lu bytes free\n", freeHeap);
+                }
+
                 lastSerialPrint = now;
             }
 

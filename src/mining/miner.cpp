@@ -622,7 +622,7 @@ void miner_task_core1(void *param) {
 }
 
 #else
-// Fallback for ESP32-S3/C3: Use sequential HAL-based mining
+// Fallback for ESP32-S3/C3: Use sequential HAL-based mining with Midstate Optimization
 
 void miner_task_core1(void *param) {
     block_header_t hb;
@@ -630,7 +630,7 @@ void miner_task_core1(void *param) {
     char jobId[MAX_JOB_ID_LEN];
     uint32_t minerId = 1;
 
-    Serial.printf("[MINER1] Started on core %d (hardware SHA, priority %d)\n",
+    Serial.printf("[MINER1] Started on core %d (Hardware SHA Midstate, priority %d)\n",
                   xPortGetCoreID(), uxTaskPriorityGet(NULL));
 
     // Wait for first job
@@ -663,12 +663,21 @@ void miner_task_core1(void *param) {
         // Set starting nonce for this core
         hb.nonce = s_startNonce[minerId];
 
+        // Prepare midstate variables
+        uint32_t midstate[8];
+        uint8_t *header_bytes = (uint8_t *)header_swapped;
+
         // Acquire hardware SHA lock for this mining burst
         sha256_ll_acquire();
 
+        // Compute midstate once for the block
+        sha256_ll_midstate(midstate, header_bytes);
+
         while (s_miningActive) {
-            // Full double SHA-256 with early 16-bit reject
-            if (sha256_ll_double_hash_full((const uint8_t *)header_swapped, hb.nonce, ctx.bytes)) {
+            // Optimized midstate mining
+            // Uses pre-computed midstate and only hashes the tail (last 16 bytes + padding)
+            // header_bytes[64] is the start of the 2nd chunk (tail)
+            if (sha256_ll_double_hash(midstate, &header_bytes[64], hb.nonce, ctx.bytes)) {
                 hashCheck(jobId, &ctx, hb.timestamp, hb.nonce);
             }
 
@@ -680,6 +689,8 @@ void miner_task_core1(void *param) {
                 sha256_ll_release();
                 vTaskDelay(1);
                 sha256_ll_acquire();
+                // Recompute midstate after yield just in case hardware state was lost (unlikely but safe)
+                sha256_ll_midstate(midstate, header_bytes);
             }
         }
 
