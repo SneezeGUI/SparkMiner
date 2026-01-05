@@ -172,6 +172,7 @@ Configuration is automatically saved to flash memory after first successful setu
 | Pool | URL | Port | Fee | Notes |
 |------|-----|------|-----|-------|
 | **Public Pool** | `public-pool.io` | `21496` | 0% | Recommended, solo mining |
+| **FindMyBlock EU** | `eu.findmyblock.xyz` | `3333` | 0% | Solo mining, EU server |
 | **CKPool Solo** | `solo.ckpool.org` | `3333` | 0.5% | Solo mining |
 | **Braiins Pool** | `stratum.braiins.com` | `3333` | 2% | Pooled mining |
 
