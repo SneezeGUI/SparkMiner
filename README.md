@@ -1,4 +1,4 @@
-# SparkMiner
+# SparkMiner v2.6.0
 
 **High-performance dual-core Bitcoin solo miner for ESP32**
 
@@ -12,17 +12,45 @@ SparkMiner is optimized firmware for the ESP32-2432S028 "Cheap Yellow Display" (
 
 ## Quick Start
 
-### Option 1: Pre-built Firmware (Easiest)
+### Option 1: Launcher + SD Card (Recommended for CYD Boards)
 
-1. Download the latest firmware from [Releases](https://github.com/SneezeGUI/SparkMiner/releases)
+The easiest way to install and manage SparkMiner on CYD boards (1-USB or 2-USB variants):
+
+**Step 1: Flash the Launcher (one-time)**
+1. Go to [Bruce Launcher Web Flasher](https://bmorcelli.github.io/Launcher/webflasher.html)
+2. Connect your CYD board via USB
+3. Select your board type and click **Install**
+4. The Launcher provides a boot menu for multiple firmwares
+
+**Step 2: Prepare SD Card**
+1. Format a microSD card as **FAT32**
+2. Download `esp32-2432s028-2usb_firmware.bin` (or your board variant) from [Releases](https://github.com/SneezeGUI/SparkMiner/releases)
+3. Copy the `.bin` file to the SD card root
+4. Create a `config.json` file (see Configuration section)
+5. Insert SD card into CYD
+
+**Step 3: Boot SparkMiner**
+1. Power on the CYD - the Launcher menu appears
+2. Select SparkMiner firmware from the SD card
+3. SparkMiner loads your config and starts mining!
+
+**Why use the Launcher?**
+- Easy firmware updates - just replace the `.bin` on SD card
+- Switch between multiple firmwares
+- No need to re-flash via USB for updates
+- Config persists on SD card
+
+### Option 2: Direct USB Flashing
+
+1. Download the latest `*_factory.bin` firmware from [Releases](https://github.com/SneezeGUI/SparkMiner/releases)
 2. Flash using [ESP Web Flasher](https://esp.huhn.me/) or esptool:
    ```bash
-   esptool.py --chip esp32 --port COM3 write_flash 0x0 SparkMiner_factory.bin
+   esptool.py --chip esp32 --port COM3 write_flash 0x0 esp32-2432s028-2usb_factory.bin
    ```
 3. Power on the board - it will create a WiFi access point
 4. Connect to `SparkMiner-XXXX` WiFi and configure via the web portal
 
-### Option 2: Build from Source
+### Option 3: Build from Source
 
 ```bash
 # Clone repository
@@ -41,17 +69,25 @@ pio device monitor
 
 ---
 
+## Firmware Types
+
+Understanding the difference between the firmware files:
+
+- **`*_firmware.bin`**: The application only. Use this for **Launcher/SD card updates** or OTA updates. It does not include the bootloader.
+- **`*_factory.bin`**: The complete image (Bootloader + Partition Table + App). Use this for **direct USB flashing** (Option 2) to a blank board or to restore a board.
+
+---
+
 ## Hardware
 
 ### Supported Boards
 
-| Board | Environment | Notes |
-|-------|-------------|-------|
-| ESP32-2432S028R (CYD 2.8") | `esp32-2432s028` | Most common, ILI9341 display |
-| ESP32-2432S028R 2-USB | `esp32-2432s028-2usb` | Has 2 USB ports, better power stability |
-| ESP32-2432S028R ST7789 | `esp32-2432s028-st7789` | Some boards use ST7789 driver |
-| ESP32-S3 DevKit | `esp32-s3-devkit` | Headless, no display |
-| ESP32 Generic | `esp32-headless` | Headless, serial output only |
+| Board | Env | Firmware | Notes |
+|-------|-----|----------|-------|
+| ESP32-2432S028R | `esp32-2432s028` | `esp32-2432s028_*.bin` | Standard CYD |
+| ESP32-2432S028R 2-USB | `esp32-2432s028-2usb` | `esp32-2432s028-2usb_*.bin` | Better power stability |
+| ESP32-2432S028R ST7789 | `esp32-2432s028-st7789` | `esp32-2432s028-st7789_*.bin` | Alt driver (rare) |
+| ESP32-S3 CYD | `esp32-s3-2432s028` | `esp32-s3-2432s028_*.bin` | S3 variant, higher perf |
 
 ### Where to Buy
 
@@ -60,7 +96,7 @@ pio device monitor
 
 ### Hardware Features
 
-- **CPU:** Dual-core Xtensa LX6 @ 240MHz
+- **CPU:** Dual-core Xtensa LX6 @ 240MHz (or LX7 for S3)
 - **Display:** 2.8" 320x240 TFT (ILI9341/ST7789)
 - **Storage:** MicroSD card slot
 - **Connectivity:** WiFi 802.11 b/g/n
@@ -114,8 +150,11 @@ If no SD card config is found, SparkMiner creates a WiFi access point:
 
 1. **Connect** to WiFi network: `SparkMiner-XXXX` (password shown on display)
 2. **Open browser** to `http://192.168.4.1`
-3. **Configure** WiFi credentials and pool settings
-4. **Save** and the device will reboot and connect
+3. You will see the **new dark-themed portal** with full configuration options:
+    - Primary & Backup Pool settings
+    - Display brightness, rotation, and color inversion
+    - Target difficulty
+4. **Configure** your settings, click **Save**, and the device will reboot and connect.
 
 ### 3. NVS (Non-Volatile Storage)
 
@@ -156,12 +195,27 @@ The BOOT button (closest to USB-C) provides these actions:
 | Action | Function | Notes |
 |--------|----------|-------|
 | **Single click** | Cycle screens | Mining → Stats → Clock |
-| **Double click** | Flip screen 180° | Rotation saved to NVS |
+| **Double click** | Cycle rotation (0°→90°→180°→270°) | Rotation saved to NVS |
 | **Triple click** | Toggle color inversion | Saved to NVS |
 | **Long press (1.5s)** | Factory reset | 3-second countdown, release to cancel |
 | **Hold at boot (5s)** | Factory reset | Alternative if UI is unresponsive |
 
 > **Note:** Buttons remain responsive during mining thanks to a dedicated FreeRTOS task.
+
+---
+
+## Display Orientation
+
+You can change the screen rotation by double-clicking the BOOT button or setting `"rotation"` in `config.json`.
+
+| Rotation | Orientation | USB Position |
+|----------|-------------|--------------|
+| 0 | Portrait | Right side |
+| 1 | Landscape | Bottom (default) |
+| 2 | Portrait | Left side |
+| 3 | Landscape | Top |
+
+*Note: Portrait mode has a bottom status bar.*
 
 ---
 
@@ -173,7 +227,7 @@ SparkMiner has 3 display screens. Press BOOT to cycle:
 
 ```
 ┌─────────────────────────────────┐
-│ SparkMiner V2       45C  [●][●] │
+│ SparkMiner v2.6     45C  [●][●] │
 ├─────────────────────────────────┤
 │  687.25 KH/s          Shares    │
 │                        12/12    │
@@ -350,6 +404,7 @@ Contributions are welcome! Please:
 ## Credits
 
 - **Sneeze** - SparkMiner development
+- **bmorcelli** - [Launcher](https://github.com/bmorcelli/Launcher) & bootloader magic
 - **BitsyMiner** - Pipelined SHA-256 assembly inspiration
 - **NerdMiner** - Stratum protocol reference
 - **ESP32 Community** - Hardware documentation
