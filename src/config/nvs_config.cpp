@@ -202,6 +202,14 @@ static bool loadConfigFromFile(miner_config_t *config) {
         config->rotation = doc["rotation"];
     }
 
+    // Stats API settings (optional)
+    if (doc.containsKey("stats_proxy_url")) {
+        safeStrCpy(config->statsProxyUrl, doc["stats_proxy_url"], sizeof(config->statsProxyUrl));
+    }
+    if (doc.containsKey("enable_https_stats")) {
+        config->enableHttpsStats = doc["enable_https_stats"];
+    }
+
     // Config file stays on SD card - NOT deleted
     // It will only be read again if NVS is reset/cleared
 

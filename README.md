@@ -201,6 +201,67 @@ SparkMiner automatically saves mining statistics to ensure your lifetime totals 
 
 ---
 
+## HTTPS Stats Proxy (Advanced)
+
+SparkMiner displays live Bitcoin price and network stats. These APIs use HTTPS, which is memory-intensive for the ESP32 and can cause stability issues or mining interruptions.
+
+To fix this, SparkMiner supports an HTTP-to-HTTPS proxy that offloads SSL/TLS to an external server.
+
+### Why use a proxy?
+- **Stability:** Offloads heavy SSL/TLS encryption to an external server
+- **Memory:** Saves ~30KB of RAM on the ESP32 for mining
+- **Performance:** Prevents mining interruptions during stats updates
+
+### Option 1: Self-Hosted Proxy (Recommended)
+
+Run the proxy on any server, Raspberry Pi, or always-on computer on your network:
+
+```bash
+# Using Node.js (save scripts/cloudflare_stats_proxy.js as proxy.js)
+npm install -g wrangler
+wrangler dev proxy.js --port 8080
+
+# Or use any HTTP-to-HTTPS proxy like:
+# - nginx with proxy_pass
+# - Caddy with reverse_proxy
+# - mitmproxy
+```
+
+Configure SparkMiner with your local proxy:
+
+```json
+{
+  "ssid": "YourWiFi",
+  "password": "YourPassword",
+  "wallet": "bc1q...",
+  "stats_proxy_url": "http://192.168.1.100:8080"
+}
+```
+
+### Option 2: Cloudflare Worker (Requires Custom Domain)
+
+The `workers.dev` domain requires HTTPS, so you need a custom domain with HTTP enabled:
+
+1. Deploy the worker from [`scripts/cloudflare_stats_proxy.js`](scripts/cloudflare_stats_proxy.js)
+2. Add a custom domain to your worker in Cloudflare dashboard
+3. In **SSL/TLS > Edge Certificates**, disable "Always Use HTTPS"
+4. Configure SparkMiner:
+
+```json
+{
+  "stats_proxy_url": "http://stats.yourdomain.com"
+}
+```
+
+### Configuration Options
+
+| Field | Description |
+|-------|-------------|
+| `stats_proxy_url` | HTTP proxy URL (e.g., `http://192.168.1.100:8080`) |
+| `enable_https_stats` | Set to `true` to fetch HTTPS directly (uses more memory, less stable) |
+
+---
+
 ## Pool Configuration
 
 ### Recommended Pools
