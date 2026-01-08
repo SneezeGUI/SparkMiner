@@ -119,17 +119,83 @@
     // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
 
 // ============================================================
-// ESP32-S3 DevKit - Hardware SHA
+// LILYGO T-Display S3 - 170x320 ST7789 (8-bit parallel)
 // ============================================================
-#elif defined(ESP32_S3_DEVKIT) || defined(ESP32_S3_MINI)
-    #define BOARD_NAME "ESP32-S3"
+#elif defined(LILYGO_T_DISPLAY_S3)
+    #define BOARD_NAME "T-Display-S3"
 
-    // No display by default
+    #ifndef USE_DISPLAY
+        #define USE_DISPLAY 1
+    #endif
+    #define DISPLAY_TYPE_TFT 1
+
+    #ifdef TFT_WIDTH
+        #undef TFT_WIDTH
+    #endif
+    #define TFT_WIDTH 170
+
+    #ifdef TFT_HEIGHT
+        #undef TFT_HEIGHT
+    #endif
+    #define TFT_HEIGHT 320
+
+    // Buttons
+    #ifndef BUTTON_PIN
+        #define BUTTON_PIN 0
+    #endif
+    #ifndef BUTTON2_PIN
+        #define BUTTON2_PIN 14
+    #endif
+    #define BUTTON_ACTIVE_LOW 1
+
+    // 5V enable pin (T-Display S3 specific)
+    #define PIN_ENABLE5V 15
+
+    // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
+
+// ============================================================
+// LILYGO T-Display V1 - 135x240 ST7789 (SPI)
+// ============================================================
+#elif defined(LILYGO_T_DISPLAY_V1)
+    #define BOARD_NAME "T-Display-V1"
+
+    #ifndef USE_DISPLAY
+        #define USE_DISPLAY 1
+    #endif
+    #define DISPLAY_TYPE_TFT 1
+
+    #ifdef TFT_WIDTH
+        #undef TFT_WIDTH
+    #endif
+    #define TFT_WIDTH 135
+
+    #ifdef TFT_HEIGHT
+        #undef TFT_HEIGHT
+    #endif
+    #define TFT_HEIGHT 240
+
+    // Buttons
+    #ifndef BUTTON_PIN
+        #define BUTTON_PIN 0
+    #endif
+    #ifndef BUTTON2_PIN
+        #define BUTTON2_PIN 35
+    #endif
+    #define BUTTON_ACTIVE_LOW 1
+
+    // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
+
+// ============================================================
+// ESP32-S3 DevKit - Hardware SHA (headless)
+// ============================================================
+#elif defined(ESP32_S3_DEVKIT)
+    #define BOARD_NAME "ESP32-S3-DevKit"
+
     #ifndef USE_DISPLAY
         #define USE_DISPLAY 0
     #endif
 
-    // LED
+    // Built-in LED (optional)
     #ifndef LED_PIN
         #define LED_PIN 48
     #endif
@@ -143,12 +209,64 @@
     // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
 
 // ============================================================
-// ESP32 Headless
+// ESP32-S3 Mini (Wemos/Lolin) - Headless with RGB LED
+// ============================================================
+#elif defined(ESP32_S3_MINI)
+    #define BOARD_NAME "ESP32-S3-Mini"
+
+    #ifndef USE_DISPLAY
+        #define USE_DISPLAY 0
+    #endif
+
+    // RGB LED Status (WS2812B on GPIO47)
+    #define USE_LED_STATUS 1
+    #ifndef RGB_LED_PIN
+        #define RGB_LED_PIN 47
+    #endif
+    #define RGB_LED_TYPE_WS2812B 1
+    #define RGB_LED_COUNT 1
+    #define RGB_LED_BRIGHTNESS 32
+
+    // Button
+    #ifndef BUTTON_PIN
+        #define BUTTON_PIN 0
+    #endif
+    #define BUTTON_ACTIVE_LOW 1
+
+    // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
+
+// ============================================================
+// ESP32 Headless - No display, serial only
 // ============================================================
 #elif defined(ESP32_HEADLESS)
     #define BOARD_NAME "ESP32-Headless"
 
     #define USE_DISPLAY 0
+
+    #ifndef BUTTON_PIN
+        #define BUTTON_PIN 0
+    #endif
+    #define BUTTON_ACTIVE_LOW 1
+
+    // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
+
+// ============================================================
+// ESP32 Headless with RGB LED
+// Generic ESP32 with external NeoPixel for status
+// ============================================================
+#elif defined(ESP32_HEADLESS_LED)
+    #define BOARD_NAME "ESP32-Headless-LED"
+
+    #define USE_DISPLAY 0
+
+    // RGB LED Status
+    #define USE_LED_STATUS 1
+    #ifndef RGB_LED_PIN
+        #define RGB_LED_PIN 2  // Common GPIO for external LED
+    #endif
+    #define RGB_LED_TYPE_WS2812B 1
+    #define RGB_LED_COUNT 1
+    #define RGB_LED_BRIGHTNESS 32
 
     #ifndef BUTTON_PIN
         #define BUTTON_PIN 0

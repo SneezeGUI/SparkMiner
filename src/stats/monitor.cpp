@@ -9,6 +9,7 @@
 #include "monitor.h"
 #include "live_stats.h"
 #include "../display/display.h"
+#include "../display/led_status.h"
 #include "../mining/miner.h"
 #include "../stratum/stratum.h"
 #include "../config/nvs_config.h"
@@ -19,14 +20,17 @@
 #define STATS_UPDATE_MS     10000   // 10 seconds
 #define PERSIST_STATS_MS    3600000 // 1 hour - save to flash for persistence
 #define EARLY_SAVE_MS       300000  // 5 minutes - initial save interval before first hourly
+#define LED_UPDATE_MS       50      // 50ms for smooth LED animations
 
 static bool s_initialized = false;
 static uint32_t s_lastDisplayUpdate = 0;
 static uint32_t s_lastStatsUpdate = 0;
 static uint32_t s_lastPersistSave = 0;
+static uint32_t s_lastLedUpdate = 0;
 static uint32_t s_startTime = 0;
 static bool s_earlySaveDone = false;      // Track if we've done the early save
 static uint32_t s_lastAcceptedCount = 0;  // Track shares for first-share save
+static uint32_t s_lastLedShareCount = 0;  // Track shares for LED flash
 
 // Track session start values to calculate deltas for persistence
 static uint64_t s_sessionStartHashes = 0;
@@ -148,6 +152,12 @@ void monitor_init() {
     // Initialize live stats
     live_stats_init();
 
+    // Initialize LED status driver (for headless builds with RGB LED)
+    #ifdef USE_LED_STATUS
+        led_status_init();
+        led_status_set(LED_STATUS_CONNECTING);
+    #endif
+
     // Load persistent stats from NVS (initializes session count)
     mining_persistence_t *pstats = nvs_stats_get();
     Serial.printf("[MONITOR] Session #%lu | Lifetime: %llu hashes, %lu shares\n",
@@ -239,6 +249,45 @@ void monitor_task(void *param) {
 
             s_lastDisplayUpdate = now;
         }
+
+        // Update LED status for headless builds
+        #ifdef USE_LED_STATUS
+        if (now - s_lastLedUpdate >= LED_UPDATE_MS) {
+            // Determine current status based on connection state
+            if (!displayData.wifiConnected) {
+                // Check if in AP mode
+                if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
+                    led_status_set(LED_STATUS_AP_MODE);
+                } else {
+                    led_status_set(LED_STATUS_CONNECTING);
+                }
+            } else if (!displayData.poolConnected) {
+                led_status_set(LED_STATUS_CONNECTING);
+            } else if (displayData.hashRate > 0) {
+                led_status_set(LED_STATUS_MINING);
+            }
+
+            // Check for new share accepted - flash LED
+            mining_stats_t *ledStats = miner_get_stats();
+            if (ledStats->accepted > s_lastLedShareCount) {
+                led_status_share_found();
+                s_lastLedShareCount = ledStats->accepted;
+            }
+
+            // Check for block found - celebration!
+            if (ledStats->blocks > 0) {
+                static uint32_t lastBlockCount = 0;
+                if (ledStats->blocks > lastBlockCount) {
+                    led_status_block_found();
+                    lastBlockCount = ledStats->blocks;
+                }
+            }
+
+            // Update LED animation
+            led_status_update();
+            s_lastLedUpdate = now;
+        }
+        #endif
 
         // Persistence save logic with early save for new sessions
         // - Save on first accepted share (immediate feedback)

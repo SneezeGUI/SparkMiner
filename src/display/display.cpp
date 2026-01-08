@@ -35,6 +35,16 @@
     #define LCD_BL_PIN      45
 #endif
 
+// LILYGO T-Display S3 (170x320, 8-bit parallel)
+#if defined(LILYGO_T_DISPLAY_S3)
+    #define LCD_BL_PIN      38
+#endif
+
+// LILYGO T-Display V1 (135x240, SPI)
+#if defined(LILYGO_T_DISPLAY_V1)
+    #define LCD_BL_PIN      4
+#endif
+
 // PWM settings for backlight
 #define LEDC_CHANNEL    0
 #define LEDC_FREQ       5000
@@ -52,10 +62,24 @@
 #define COLOR_DIM       0x528A  // Darker gray
 #define COLOR_PANEL     0x10A2  // Very dark gray panel
 
-// Layout
-#define MARGIN          10
-#define LINE_HEIGHT     22
-#define HEADER_HEIGHT   40
+// Layout - responsive to display size
+// Small displays (135x240 T-Display V1) need tighter spacing
+#if defined(LILYGO_T_DISPLAY_V1)
+    #define MARGIN          4
+    #define LINE_HEIGHT     16
+    #define HEADER_HEIGHT   24
+    #define SMALL_DISPLAY   1
+#elif defined(LILYGO_T_DISPLAY_S3)
+    #define MARGIN          6
+    #define LINE_HEIGHT     18
+    #define HEADER_HEIGHT   30
+    #define SMALL_DISPLAY   1
+#else
+    #define MARGIN          10
+    #define LINE_HEIGHT     22
+    #define HEADER_HEIGHT   40
+    #define SMALL_DISPLAY   0
+#endif
 
 // ============================================================
 // State
@@ -674,6 +698,13 @@ static void drawClockScreen(const display_data_t *data) {
 // ============================================================
 
 void display_init(uint8_t rotation, uint8_t brightness) {
+    // Enable 5V power for T-Display S3 (required before display init)
+    #ifdef PIN_ENABLE5V
+        pinMode(PIN_ENABLE5V, OUTPUT);
+        digitalWrite(PIN_ENABLE5V, HIGH);
+        delay(10);  // Allow power to stabilize
+    #endif
+
     // Initialize TFT
     s_tft.init();
     s_rotation = rotation;
@@ -694,41 +725,75 @@ void display_init(uint8_t rotation, uint8_t brightness) {
     int w = s_tft.width();
     int h = s_tft.height();
 
-    // Draw large spark logo in center
-    drawSparkLogo(w/2 - 40, 40, 80);
+    // Responsive boot screen layout
+    #if SMALL_DISPLAY
+        // Smaller logo and text for T-Display boards
+        drawSparkLogo(w/2 - 25, 20, 50);
 
-    // Title with spark gradient
-    s_tft.setTextSize(3);
-    s_tft.setTextColor(COLOR_ACCENT);
-    s_tft.setCursor(w/2 - 90, 130);
-    s_tft.print("Spark");
-    s_tft.setTextColor(COLOR_SPARK1);
-    s_tft.print("Miner");
+        s_tft.setTextSize(2);
+        s_tft.setTextColor(COLOR_ACCENT);
+        s_tft.setCursor(w/2 - 60, 80);
+        s_tft.print("Spark");
+        s_tft.setTextColor(COLOR_SPARK1);
+        s_tft.print("Miner");
+    #else
+        // Full-size logo for CYD boards
+        drawSparkLogo(w/2 - 40, 40, 80);
 
-    // Major version badge (large)
-    s_tft.setTextSize(2);
-    s_tft.setTextColor(COLOR_SPARK2);
-    s_tft.setCursor(w/2 - 30, 158);
-    s_tft.print("V");
-    s_tft.print(getMajorVersion());
+        s_tft.setTextSize(3);
+        s_tft.setTextColor(COLOR_ACCENT);
+        s_tft.setCursor(w/2 - 90, 130);
+        s_tft.print("Spark");
+        s_tft.setTextColor(COLOR_SPARK1);
+        s_tft.print("Miner");
+    #endif
 
-    // Full version
-    s_tft.setTextColor(COLOR_DIM);
-    s_tft.setTextSize(1);
-    s_tft.setCursor(w/2 + 10, 162);
-    s_tft.print("(" AUTO_VERSION ")");
-
-    // Tagline (only if space permits)
-    if (h >= 240) {
+    // Version and tagline - responsive layout
+    #if SMALL_DISPLAY
+        // Compact version display for small screens
+        s_tft.setTextSize(1);
+        s_tft.setTextColor(COLOR_SPARK2);
+        s_tft.setCursor(w/2 - 35, 105);
+        s_tft.print("V");
+        s_tft.print(getMajorVersion());
         s_tft.setTextColor(COLOR_DIM);
-        s_tft.setCursor(w/2 - 75, 185);
-        s_tft.print("A tiny spark of mining power");
+        s_tft.print(" (" AUTO_VERSION ")");
+
+        // Shorter tagline
+        s_tft.setTextColor(COLOR_DIM);
+        s_tft.setCursor(w/2 - 45, 125);
+        s_tft.print("Solo BTC Mining");
 
         // Credits
         s_tft.setTextColor(COLOR_SPARK2);
-        s_tft.setCursor(w/2 - 30, 210);
+        s_tft.setCursor(w/2 - 25, 145);
         s_tft.print("by Sneeze");
-    }
+    #else
+        // Full version badge (large)
+        s_tft.setTextSize(2);
+        s_tft.setTextColor(COLOR_SPARK2);
+        s_tft.setCursor(w/2 - 30, 158);
+        s_tft.print("V");
+        s_tft.print(getMajorVersion());
+
+        // Full version
+        s_tft.setTextColor(COLOR_DIM);
+        s_tft.setTextSize(1);
+        s_tft.setCursor(w/2 + 10, 162);
+        s_tft.print("(" AUTO_VERSION ")");
+
+        // Tagline (only if space permits)
+        if (h >= 240) {
+            s_tft.setTextColor(COLOR_DIM);
+            s_tft.setCursor(w/2 - 75, 185);
+            s_tft.print("A tiny spark of mining power");
+
+            // Credits
+            s_tft.setTextColor(COLOR_SPARK2);
+            s_tft.setCursor(w/2 - 30, 210);
+            s_tft.print("by Sneeze");
+        }
+    #endif
 
     delay(2000);
 
