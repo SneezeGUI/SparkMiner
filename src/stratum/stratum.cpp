@@ -8,6 +8,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
+#include <utility>  // For std::swap
 #include <board_config.h>
 #include "stratum.h"
 #include "../mining/miner.h"
@@ -63,7 +64,7 @@ static void safeStrCpy(char *dest, const char *src, size_t maxLen) {
     dest[maxLen - 1] = '\0';
 }
 
-// Format hex string with zero padding
+// Format hex string with zero padding (big-endian - value as hex)
 static void formatHex8(char *dest, uint32_t value) {
     static const char *hex = "0123456789abcdef";
     for (int i = 7; i >= 0; i--) {
@@ -186,21 +187,42 @@ static void parseMiningNotify(const String &line) {
 
     JsonArray params = s_doc["params"];
 
-    stratum_job_t job;
-    job.jobId = String((const char *)params[0]);
-    job.prevHash = String((const char *)params[1]);
-    job.coinBase1 = String((const char *)params[2]);
-    job.coinBase2 = String((const char *)params[3]);
-    job.merkleBranch = params[4];
-    job.version = String((const char *)params[5]);
-    job.nbits = String((const char *)params[6]);
-    job.ntime = String((const char *)params[7]);
+    // Use static job to avoid stack allocation of large struct each time
+    static stratum_job_t job;
+    memset(&job, 0, sizeof(job));
+
+    // Copy strings to fixed char arrays (no heap allocation!)
+    const char *p0 = params[0];
+    const char *p1 = params[1];
+    const char *p2 = params[2];
+    const char *p3 = params[3];
+    const char *p5 = params[5];
+    const char *p6 = params[6];
+    const char *p7 = params[7];
+
+    if (p0) strncpy(job.jobId, p0, STRATUM_JOB_ID_LEN - 1);
+    if (p1) strncpy(job.prevHash, p1, STRATUM_PREVHASH_LEN - 1);
+    if (p2) strncpy(job.coinBase1, p2, STRATUM_COINBASE1_LEN - 1);
+    if (p3) strncpy(job.coinBase2, p3, STRATUM_COINBASE2_LEN - 1);
+    if (p5) strncpy(job.version, p5, STRATUM_FIELD_LEN - 1);
+    if (p6) strncpy(job.nbits, p6, STRATUM_FIELD_LEN - 1);
+    if (p7) strncpy(job.ntime, p7, STRATUM_FIELD_LEN - 1);
+
+    // Copy merkle branches to fixed array
+    JsonArray merkle = params[4];
+    job.merkleBranchCount = 0;
+    for (size_t i = 0; i < merkle.size() && i < STRATUM_MAX_MERKLE; i++) {
+        const char *branch = merkle[i];
+        if (branch) {
+            strncpy(job.merkleBranches[i], branch, 67);
+            job.merkleBranches[i][67] = '\0';
+            job.merkleBranchCount++;
+        }
+    }
+
     job.cleanJobs = params[8] | false;
-
-    job.extraNonce1 = String(s_extraNonce1);
+    strncpy(job.extraNonce1, s_extraNonce1, STRATUM_EXTRANONCE_LEN - 1);
     job.extraNonce2Size = s_extraNonce2Size;
-
-    dbg("[STRATUM] New job: %s clean=%d\n", job.jobId.c_str(), job.cleanJobs);
 
     s_lastActivity = millis();
     miner_start_job(&job);
@@ -299,8 +321,6 @@ static bool waitForResponseById(WiFiClient &client, uint32_t expectedId, String 
             return false;
         }
 
-        Serial.printf("[STRATUM] RX: %s\n", line.c_str());
-
         // Parse to check if this is our response or a method call
         s_doc.clear();
         DeserializationError err = deserializeJson(s_doc, line);
@@ -312,14 +332,12 @@ static bool waitForResponseById(WiFiClient &client, uint32_t expectedId, String 
         // Check if this is a method call (id is null or missing, has "method" field)
         if (s_doc.containsKey("method")) {
             const char *method = s_doc["method"];
-            Serial.printf("[STRATUM] Got method call: %s (will process later)\n", method);
 
             // Handle set_difficulty immediately since it's important
             if (strcmp(method, "mining.set_difficulty") == 0) {
                 double diff = s_doc["params"][0] | 1.0;
                 if (!isnan(diff) && diff > 0) {
                     miner_set_difficulty(diff);
-                    Serial.printf("[STRATUM] Pool difficulty set to: %.6f\n", diff);
                 }
             }
             // Continue reading for our actual response
@@ -353,7 +371,6 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
         "{\"id\":%lu,\"method\":\"mining.subscribe\",\"params\":[\"%s/%s\"]}",
         subId, MINER_NAME, AUTO_VERSION);
 
-    Serial.printf("[STRATUM] TX: %s\n", msg);
     uint32_t startSub = millis();
     if (!sendMessage(client, msg)) return false;
 
@@ -398,7 +415,6 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
         "{\"id\":%lu,\"method\":\"mining.authorize\",\"params\":[\"%s\",\"%s\"]}",
         authId, fullUsername, password);
 
-    Serial.printf("[STRATUM] TX: %s\n", msg);
     uint32_t startAuth = millis();
     if (!sendMessage(client, msg)) return false;
 
@@ -427,23 +443,26 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
 
 static void submitShare(WiFiClient &client, const submit_entry_t *entry) {
     char msg[STRATUM_MSG_BUFFER];
-    char timestamp[9], nonce[9], versionBits[9];
+    char timestamp[9], nonce[9];
 
+    // Format as 8-char hex (value as hex, zero-padded)
     formatHex8(timestamp, entry->timestamp);
     formatHex8(nonce, entry->nonce);
-    formatHex8(versionBits, entry->versionBits);
 
     uint32_t msgId = getNextId();
 
+    // Standard Stratum v1 submit (5 params, no version rolling)
     snprintf(msg, sizeof(msg),
-        "{\"id\":%lu,\"method\":\"mining.submit\",\"params\":[\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"]}",
+        "{\"id\":%lu,\"method\":\"mining.submit\",\"params\":[\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"]}",
         msgId,
-        s_primaryPool.wallet,  // TODO: Use current pool's wallet
+        s_primaryPool.wallet,
         entry->jobId,
         entry->extraNonce2,
         timestamp,
-        nonce,
-        versionBits);
+        nonce);
+
+    Serial.printf("[STRATUM] Submit: job=%s en2=%s time=%s nonce=%s\n",
+        entry->jobId, entry->extraNonce2, timestamp, nonce);
 
     if (sendMessage(client, msg)) {
         // Store in pending responses for latency tracking
@@ -480,7 +499,6 @@ void stratum_init() {
 
 void stratum_task(void *param) {
     WiFiClient client;
-    WiFiClient altClient;
     bool usingBackup = false;
     uint32_t lastConnectAttempt = 0;
     uint32_t backupConnectTime = 0;
@@ -534,7 +552,8 @@ void stratum_task(void *param) {
             Serial.printf("[STRATUM] Connecting to %s:%d...\n",
                 s_primaryPool.url, s_primaryPool.port);
 
-            if (client.connect(s_primaryPool.url, s_primaryPool.port)) {
+            // STABILITY FIX: Use connect timeout (10s) to prevent long blocks
+            if (client.connect(s_primaryPool.url, s_primaryPool.port, 10000)) {
                 if (subscribe(client, s_primaryPool.wallet, s_primaryPool.password)) {
                     s_isConnected = true;
                     s_lastActivity = millis();
@@ -551,7 +570,8 @@ void stratum_task(void *param) {
                     Serial.printf("[STRATUM] Trying backup: %s:%d\n",
                         s_backupPool.url, s_backupPool.port);
 
-                    if (client.connect(s_backupPool.url, s_backupPool.port)) {
+                    // STABILITY FIX: Use connect timeout (10s)
+                    if (client.connect(s_backupPool.url, s_backupPool.port, 10000)) {
                         if (subscribe(client, s_backupPool.wallet, s_backupPool.password)) {
                             s_isConnected = true;
                             usingBackup = true;
@@ -576,15 +596,23 @@ void stratum_task(void *param) {
 
         // Try to switch back from backup after 2 minutes
         if (usingBackup && (millis() - backupConnectTime > 120000)) {
-            if (altClient.connect(s_primaryPool.url, s_primaryPool.port)) {
-                if (subscribe(altClient, s_primaryPool.wallet, s_primaryPool.password)) {
+            // STABILITY FIX: Use connect timeout and avoid shallow copy of WiFiClient
+            // Test connection to primary pool first
+            WiFiClient testClient;
+            if (testClient.connect(s_primaryPool.url, s_primaryPool.port, 10000)) {
+                if (subscribe(testClient, s_primaryPool.wallet, s_primaryPool.password)) {
+                    // Successfully connected to primary - switch over
                     miner_stop();
                     client.stop();
-                    client = altClient;
+                    // Use swap to safely transfer the connection instead of shallow copy
+                    std::swap(client, testClient);
+                    testClient.stop();  // Clean up the old (now empty) client
                     usingBackup = false;
                     safeStrCpy(s_currentPoolUrl, s_primaryPool.url, MAX_POOL_URL_LEN);
                     Serial.println("[STRATUM] Switched back to primary pool");
                     continue;
+                } else {
+                    testClient.stop();
                 }
             }
             backupConnectTime = millis();  // Try again later

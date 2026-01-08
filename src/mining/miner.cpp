@@ -11,12 +11,21 @@
 #include <Arduino.h>
 #include <esp_task_wdt.h>
 #include <ArduinoJson.h>
+
+#if defined(CONFIG_IDF_TARGET_ESP32)
+#include <soc/dport_reg.h>
+#include <soc/hwcrypto_reg.h>
+#endif
+
 #include "miner.h"
 #include "sha256_types.h"
 #include "sha256_hw.h"  // Hardware SHA-256 wrapper
 #include "sha256_ll.h"  // Low-level hardware SHA register access
-#include "sha256_pipelined.h"  // Pipelined assembly mining (Core 1)
-#include "sha256_soft.h"  // Pure software SHA-256 (Core 0, no hardware)
+#include "sha256_s3.h"  // S3-specific SHA (proven working with self-test)
+#include "sha256_s3_dma.h"  // DMA-based SHA test
+#include "sha256_asm.h"  // Pipelined assembly mining (Core 1) - ESP32
+#include "sha256_pipelined_s3.h"  // Pipelined assembly mining (Core 1) - ESP32-S3
+#include "miner_sha256.h"  // BitsyMiner software SHA-256 (verification + Core 0)
 #include "../stratum/stratum.h"
 #include "board_config.h"
 
@@ -169,11 +178,6 @@ static void setPoolTarget() {
     uint8_t maxDifficulty[32];
     bits_to_target(MAX_DIFFICULTY, maxDifficulty);
     adjust_target_for_difficulty(s_poolTarget, maxDifficulty, s_poolDifficulty);
-    
-    // Debug target (Top 64 bits)
-    Serial.printf("[MINER] New Target (High): %02x%02x%02x%02x%02x%02x%02x%02x\n", 
-        s_poolTarget[31], s_poolTarget[30], s_poolTarget[29], s_poolTarget[28],
-        s_poolTarget[27], s_poolTarget[26], s_poolTarget[25], s_poolTarget[24]);
 }
 
 // Check if hash meets target (little-endian comparison from high bytes)
@@ -196,15 +200,14 @@ static void double_sha256_merkle(uint8_t *dest, uint8_t *buf64) {
     memcpy(dest, ctx1.bytes, 32);
 }
 
-static void calculateMerkleRoot(uint8_t *root, uint8_t *coinbaseHash, JsonArray &merkleBranch) {
+static void calculateMerkleRoot(uint8_t *root, uint8_t *coinbaseHash, const stratum_job_t *job) {
     uint8_t merklePair[64];
     memcpy(merklePair, coinbaseHash, 32);
 
-    for (size_t i = 0; i < merkleBranch.size(); i++) {
-        const char *branchHex = merkleBranch[i].as<const char *>();
-        hexToBytes(&merklePair[32], branchHex, 64);
+    for (int i = 0; i < job->merkleBranchCount; i++) {
+        hexToBytes(&merklePair[32], job->merkleBranches[i], 64);
         // NerdMiner does NOT reverse merkle branches
-        
+
         double_sha256_merkle(merklePair, merklePair);
         // NerdMiner does NOT reverse intermediate merkle results
     }
@@ -215,14 +218,14 @@ static void createCoinbaseHash(uint8_t *hash, const stratum_job_t *job) {
     uint8_t coinbase[512];
     size_t cbLen = 0;
 
-    // Coinbase1
-    size_t cb1Len = job->coinBase1.length();
-    hexToBytes(coinbase, job->coinBase1.c_str(), cb1Len);
+    // Coinbase1 (now char array)
+    size_t cb1Len = strlen(job->coinBase1);
+    hexToBytes(coinbase, job->coinBase1, cb1Len);
     cbLen += cb1Len / 2;
 
-    // ExtraNonce1
-    size_t en1Len = strlen(s_extraNonce1);
-    hexToBytes(&coinbase[cbLen], s_extraNonce1, en1Len);
+    // ExtraNonce1 (from job struct now)
+    size_t en1Len = strlen(job->extraNonce1);
+    hexToBytes(&coinbase[cbLen], job->extraNonce1, en1Len);
     cbLen += en1Len / 2;
 
     // ExtraNonce2
@@ -231,9 +234,9 @@ static void createCoinbaseHash(uint8_t *hash, const stratum_job_t *job) {
     hexToBytes(&coinbase[cbLen], en2Hex, s_extraNonce2Size * 2);
     cbLen += s_extraNonce2Size;
 
-    // Coinbase2
-    size_t cb2Len = job->coinBase2.length();
-    hexToBytes(&coinbase[cbLen], job->coinBase2.c_str(), cb2Len);
+    // Coinbase2 (now char array)
+    size_t cb2Len = strlen(job->coinBase2);
+    hexToBytes(&coinbase[cbLen], job->coinBase2, cb2Len);
     cbLen += cb2Len / 2;
 
     // Double SHA256
@@ -324,6 +327,10 @@ void miner_init() {
 
     // Initialize hardware SHA-256 peripheral
     sha256_hw_init();
+    
+    // Run DMA-based SHA test at startup
+    sha256_s3_dma_test();
+    
     Serial.println("[MINER] Initialized (Hardware SHA-256 via direct register access)");
 }
 
@@ -341,22 +348,33 @@ void miner_start_job(const stratum_job_t *job) {
     // Random ExtraNonce2
     s_extraNonce2 = esp_random();
 
-    // Build block header
-    s_pendingBlock.version = strtoul(job->version.c_str(), NULL, 16);
-    hexToBytes(s_pendingBlock.prev_hash, job->prevHash.c_str(), 64);
-    swapBytesInWords(s_pendingBlock.prev_hash, 32); // Convert to Block Header Endianness (swap bytes in 4-byte words)
+    // Build block header (using char arrays now - no heap allocation)
+    s_pendingBlock.version = strtoul(job->version, NULL, 16);
+    hexToBytes(s_pendingBlock.prev_hash, job->prevHash, 64);
+    swapBytesInWords(s_pendingBlock.prev_hash, 32); // Swap bytes within each 4-byte word (NerdMiner does this)
 
     // Create coinbase hash and merkle root
     uint8_t coinbaseHash[32];
     createCoinbaseHash(coinbaseHash, job);
-    JsonArray branches = job->merkleBranch;
-    calculateMerkleRoot(s_pendingBlock.merkle_root, coinbaseHash, branches);
 
-    s_pendingBlock.timestamp = strtoul(job->ntime.c_str(), NULL, 16);
-    s_pendingBlock.difficulty = strtoul(job->nbits.c_str(), NULL, 16);
+    calculateMerkleRoot(s_pendingBlock.merkle_root, coinbaseHash, job);
+
+    s_pendingBlock.timestamp = strtoul(job->ntime, NULL, 16);
+    s_pendingBlock.difficulty = strtoul(job->nbits, NULL, 16);
     s_pendingBlock.nonce = 0;
 
-    strncpy(s_currentJobId, job->jobId.c_str(), MAX_JOB_ID_LEN - 1);
+    strncpy(s_currentJobId, job->jobId, MAX_JOB_ID_LEN - 1);
+
+    // Debug: print header bytes
+    char en2Hex[17];
+    encodeExtraNonce(en2Hex, s_extraNonce2Size, s_extraNonce2);
+    Serial.printf("[MINER] New job: %s, diff=%08x\n", s_currentJobId, s_pendingBlock.difficulty);
+    Serial.printf("[MINER] en2=%s, ntime=%s, version=%s\n", en2Hex, job->ntime, job->version);
+    Serial.printf("[MINER] Header bytes 0-7: %02x%02x%02x%02x %02x%02x%02x%02x\n",
+        ((uint8_t*)&s_pendingBlock)[0], ((uint8_t*)&s_pendingBlock)[1],
+        ((uint8_t*)&s_pendingBlock)[2], ((uint8_t*)&s_pendingBlock)[3],
+        ((uint8_t*)&s_pendingBlock)[4], ((uint8_t*)&s_pendingBlock)[5],
+        ((uint8_t*)&s_pendingBlock)[6], ((uint8_t*)&s_pendingBlock)[7]);
 
     // Set block target
     bits_to_target(s_pendingBlock.difficulty, s_blockTarget);
@@ -399,25 +417,25 @@ void miner_set_extranonce(const char *extraNonce1, int extraNonce2Size) {
 }
 
 // ============================================================
-// Mining Task - Core 0 (Software SHA-256, no hardware contention)
+// Mining Task - Core 0 (BitsyMiner Software SHA-256 with Midstate)
 // ============================================================
 
 void miner_task_core0(void *param) {
     block_header_t hb;
     sha256_hash_t ctx;
+    sha256_hash_t midstate;
     char jobId[MAX_JOB_ID_LEN];
     uint32_t minerId = 0;
     uint32_t yieldCounter = 0;
-    uint8_t hash_raw[32];
 
-    Serial.printf("[MINER0] Started on core %d (SOFTWARE SHA, priority %d)\n",
+    Serial.printf("[MINER0] Started on core %d (BitsyMiner SOFTWARE SHA, priority %d)\n",
                   xPortGetCoreID(), uxTaskPriorityGet(NULL));
 
     // Wait for first job
     while (!s_miningActive) {
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
-    Serial.println("[MINER0] Got first job, starting software mining loop");
+    Serial.println("[MINER0] Got first job, starting BitsyMiner midstate mining loop");
 
     while (true) {
         if (!s_miningActive) {
@@ -435,34 +453,15 @@ void miner_task_core0(void *param) {
         hb.nonce = s_startNonce[minerId];
         xSemaphoreGive(s_jobMutex);
 
-        // Create byte-swapped header for software SHA (same format as hardware)
-        uint32_t header_swapped[20];
-        uint32_t *header_words = (uint32_t *)&hb;
-        for (int i = 0; i < 19; i++) {  // Swap all except nonce (we'll update it in loop)
-            header_swapped[i] = __builtin_bswap32(header_words[i]);
-        }
+        // BitsyMiner pattern: Compute midstate ONCE per job (first 64 bytes)
+        // This is 75% less SHA work per nonce iteration!
+        miner_sha256_midstate(&midstate, &hb);
 
         while (s_miningActive) {
-            // Update nonce in swapped format
-            header_swapped[19] = __builtin_bswap32(hb.nonce);
-
-            // Software double SHA-256 (no hardware, safe for Core 0)
-            // Returns true if 16-bit early check passes
-            if (sha256_soft_double((const uint8_t *)header_swapped, 80, hash_raw)) {
-                // Early 16-bit check passed - convert to hardware-compatible format
-                // Hardware format: reverse word order + byte-swap each word
-                uint32_t *words = (uint32_t *)hash_raw;
-                uint32_t *out = (uint32_t *)ctx.bytes;
-                out[7] = __builtin_bswap32(words[0]);  // H0 -> out[7]
-                out[6] = __builtin_bswap32(words[1]);  // H1 -> out[6]
-                out[5] = __builtin_bswap32(words[2]);  // H2 -> out[5]
-                out[4] = __builtin_bswap32(words[3]);  // H3 -> out[4]
-                out[3] = __builtin_bswap32(words[4]);  // H4 -> out[3]
-                out[2] = __builtin_bswap32(words[5]);  // H5 -> out[2]
-                out[1] = __builtin_bswap32(words[6]);  // H6 -> out[1]
-                out[0] = __builtin_bswap32(words[7]);  // H7 -> out[0]
-
-                // Check against pool target and submit if valid
+            // BitsyMiner pattern: Only hash the tail (16 bytes + nonce) using midstate
+            // Early 16-bit reject is built into miner_sha256_header()
+            if (miner_sha256_header(&midstate, &ctx, &hb)) {
+                // 16-bit check passed - potential share
                 hashCheck(jobId, &ctx, hb.timestamp, hb.nonce);
             }
 
@@ -526,21 +525,24 @@ static bool IRAM_ATTR verify_share_software(block_header_t *hdr, uint32_t nonce,
 
 void miner_task_core1(void *param) {
     block_header_t hb;
+    block_header_t hbVerify;  // BitsyMiner pattern: keep UNSWAPPED copy for verification
     sha256_hash_t ctx;
+    sha256_hash_t midstate;
     char jobId[MAX_JOB_ID_LEN];
     uint32_t minerId = 1;
 
-    Serial.printf("[MINER1] Started on core %d (PIPELINED ASM, priority %d)\n",
+    Serial.printf("[MINER1] Started on core %d (PIPELINED ASM + BitsyMiner SW verify, priority %d)\n",
                   xPortGetCoreID(), uxTaskPriorityGet(NULL));
 
-    // Initialize pipelined SHA hardware
-    sha256_pipelined_init();
+    // Enable SHA peripheral clock and clear reset
+    DPORT_REG_SET_BIT(DPORT_PERI_CLK_EN_REG, DPORT_PERI_EN_SHA);
+    DPORT_REG_CLR_BIT(DPORT_PERI_RST_EN_REG, DPORT_PERI_EN_SHA | DPORT_PERI_EN_SECUREBOOT);
 
     // Wait for first job
     while (!s_miningActive) {
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
-    Serial.println("[MINER1] Got first job, starting pipelined mining loop");
+    Serial.println("[MINER1] Got first job, starting pipelined mining with BitsyMiner verification");
 
     // SHA peripheral base address
     volatile uint32_t *sha_base = (volatile uint32_t *)0x3FF03000;  // SHA_TEXT_BASE
@@ -556,8 +558,12 @@ void miner_task_core1(void *param) {
         // Copy job data
         xSemaphoreTake(s_jobMutex, portMAX_DELAY);
         memcpy(&hb, &s_pendingBlock, sizeof(block_header_t));
+        memcpy(&hbVerify, &s_pendingBlock, sizeof(block_header_t));  // Keep UNSWAPPED for verification!
         strncpy(jobId, s_currentJobId, MAX_JOB_ID_LEN);
         xSemaphoreGive(s_jobMutex);
+
+        // BitsyMiner pattern: Compute SOFTWARE midstate on UNSWAPPED header (for verification)
+        miner_sha256_midstate(&midstate, &hbVerify);
 
         // Create byte-swapped header for hardware SHA (pipelined mining)
         uint32_t header_swapped[20];
@@ -569,14 +575,15 @@ void miner_task_core1(void *param) {
         // Set starting nonce (in swapped format for hardware)
         uint32_t nonce_swapped = __builtin_bswap32(s_startNonce[minerId]);
 
-        // Initialize pipelined SHA
-        sha256_pipelined_init();
+        // Re-initialize SHA hardware before loop
+        DPORT_REG_SET_BIT(DPORT_PERI_CLK_EN_REG, DPORT_PERI_EN_SHA);
+        DPORT_REG_CLR_BIT(DPORT_PERI_RST_EN_REG, DPORT_PERI_EN_SHA | DPORT_PERI_EN_SECUREBOOT);
 
         while (s_miningActive) {
-            // Run pipelined assembly mining loop
-            // Returns true when 16-bit early check passes (potential share)
-            // Returns false when mining_flag becomes false
-            bool candidate = sha256_pipelined_mine(
+            // Run OPTIMIZED pipelined assembly mining loop (v2)
+            // - Unrolled zero loop (eliminates loop overhead)
+            // - Persistent zero register
+            bool candidate = sha256_pipelined_mine_v2(
                 sha_base,
                 header_swapped,
                 &nonce_swapped,
@@ -587,32 +594,33 @@ void miner_task_core1(void *param) {
             if (!s_miningActive) break;
 
             if (candidate) {
-                // Potential share found! Re-verify with HARDWARE SHA before submitting.
-                // Use same function as Core 0 to ensure byte-for-byte matching.
-
-                // The assembly incremented nonce BEFORE exiting, so use nonce-1
+                // BitsyMiner pattern: The assembly incremented nonce BEFORE exiting, so use nonce-1
                 uint32_t candidate_nonce_swapped = nonce_swapped - 1;
                 uint32_t candidate_nonce_native = __builtin_bswap32(candidate_nonce_swapped);
 
-                // CRITICAL: Acquire mutex before using SHA hardware (Core 0 may be using it!)
-                sha256_ll_acquire();
-
-                // Re-verify using same function as Core 0 (proven to work)
-                if (sha256_ll_double_hash_full((const uint8_t *)header_swapped, candidate_nonce_native, ctx.bytes)) {
-                    // Verified share - submit it
-                    hashCheck(jobId, &ctx, hb.timestamp, candidate_nonce_native);
+                // BitsyMiner CRITICAL pattern: Verify with SOFTWARE SHA on UNSWAPPED header
+                // This is what the pool computes, so hashes MUST match!
+                hbVerify.nonce = candidate_nonce_native;
+                if (miner_sha256_header(&midstate, &ctx, &hbVerify)) {
+                    // SOFTWARE verified share - submit it
+                    hashCheck(jobId, &ctx, hbVerify.timestamp, candidate_nonce_native);
                 }
 
-                sha256_ll_release();
-
                 // Re-init pipelined SHA hardware
-                sha256_pipelined_init();
+                DPORT_REG_SET_BIT(DPORT_PERI_CLK_EN_REG, DPORT_PERI_EN_SHA);
+                DPORT_REG_CLR_BIT(DPORT_PERI_RST_EN_REG, DPORT_PERI_EN_SHA | DPORT_PERI_EN_SECUREBOOT);
             }
 
             // Yield periodically to prevent WDT
-            if ((nonce_swapped & 0x3FFFF) == 0) {
+            // The ASM function returns every ~65k hashes (on partial match),
+            // so we yield every 16 iterations (approx 1M hashes)
+            static uint32_t loop_iter = 0;
+            if (++loop_iter >= 16) {
+                loop_iter = 0;
                 vTaskDelay(1);
-                sha256_pipelined_init();
+                // Re-init after yield
+                DPORT_REG_SET_BIT(DPORT_PERI_CLK_EN_REG, DPORT_PERI_EN_SHA);
+                DPORT_REG_CLR_BIT(DPORT_PERI_RST_EN_REG, DPORT_PERI_EN_SHA | DPORT_PERI_EN_SECUREBOOT);
             }
         }
 
@@ -621,8 +629,144 @@ void miner_task_core1(void *param) {
     }
 }
 
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
+#include <sha/sha_dma.h>  // For esp_sha_acquire/release_hardware
+// ESP32-S3: Optimized pipelined assembly mining with MIDSTATE CACHING (v2)
+// Key optimizations:
+// 1. Hardware midstate computed ONCE per job (not per nonce!)
+// 2. Block 2 template prepared once, only nonce changes
+// 3. Double-hash padding leverages zeros from block 2
+
+void miner_task_core1(void *param) {
+    block_header_t hb;
+    block_header_t hbVerify;  // BitsyMiner pattern: keep UNSWAPPED copy for verification
+    sha256_hash_t ctx;
+    sha256_hash_t sw_midstate;  // SOFTWARE midstate for verification
+    uint32_t hw_midstate[8];    // HARDWARE midstate for mining (NEW!)
+    char jobId[MAX_JOB_ID_LEN];
+    uint32_t minerId = 1;
+
+    Serial.printf("[MINER1] Started on core %d (S3 Optimized ASM v2 + Midstate Cache, priority %d)\n",
+                  xPortGetCoreID(), uxTaskPriorityGet(NULL));
+
+    // Initialize S3 pipelined SHA hardware
+    sha256_pipelined_s3_init();
+
+    // Wait for first job
+    while (!s_miningActive) {
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
+    Serial.println("[MINER1] Got first job, starting S3 optimized assembly mining (v2 with midstate)");
+
+    while (true) {
+        if (!s_miningActive) {
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        s_core1Mining = true;
+
+        // Copy job data
+        xSemaphoreTake(s_jobMutex, portMAX_DELAY);
+        memcpy(&hb, &s_pendingBlock, sizeof(block_header_t));
+        memcpy(&hbVerify, &s_pendingBlock, sizeof(block_header_t));  // Keep UNSWAPPED for verification!
+        strncpy(jobId, s_currentJobId, MAX_JOB_ID_LEN);
+        xSemaphoreGive(s_jobMutex);
+
+        // BitsyMiner pattern: Compute SOFTWARE midstate on UNSWAPPED header (for verification)
+        miner_sha256_midstate(&sw_midstate, &hbVerify);
+
+        // ========================================
+        // BYTESWAP32 all 20 words of header for hardware SHA
+        // ========================================
+        uint32_t header_swapped[20];
+        uint32_t *header_words = (uint32_t *)&hb;
+        for (int i = 0; i < 20; i++) {
+            header_swapped[i] = __builtin_bswap32(header_words[i]);
+        }
+
+        // ========================================
+        // OPTIMIZATION v3: Compute hardware midstate ONCE per job!
+        // Also initialize persistent zeros in SHA_TEXT
+        // ========================================
+        esp_sha_acquire_hardware();
+        sha256_s3_compute_midstate(header_swapped, hw_midstate);
+        sha256_s3_init_zeros();  // Set persistent zeros for block 2 padding
+
+        // Prepare block 2 template (words 16-18: last 4 bytes merkle, timestamp, nbits)
+        // Word 19 (nonce) will be set per iteration
+        uint32_t block2_template[3];
+        block2_template[0] = header_swapped[16];  // merkle_root tail (swapped)
+        block2_template[1] = header_swapped[17];  // timestamp (swapped)
+        block2_template[2] = header_swapped[18];  // nbits (swapped)
+
+        // Nonce in big-endian format for hardware SHA
+        uint32_t nonce_swapped = __builtin_bswap32(s_startNonce[minerId]);
+
+        #ifdef DEBUG_MINING
+        Serial.printf("[S3-V3] Midstate cached, zeros persistent, starting batched-copy loop\n");
+        static uint32_t s3_call_count = 0;
+        uint64_t hashes_before = s_stats.hashes;
+        #endif
+
+        while (s_miningActive) {
+            // Run ULTRA-OPTIMIZED pipelined assembly mining loop (v3)
+            // - Midstate restore (same as v2)
+            // - Batched register loads for SHA_H copy (pipeline memory)
+            // - Persistent zeros (skip writing 10 zeros per iteration)
+            #ifdef DEBUG_MINING
+            s3_call_count++;
+            #endif
+
+            bool candidate = sha256_pipelined_mine_s3_v3(
+                hw_midstate,
+                block2_template,
+                &nonce_swapped,
+                &s_stats.hashes,
+                &s_miningActive
+            );
+
+            #ifdef DEBUG_MINING
+            if ((s3_call_count & 0x7FFFF) == 0) {  // Every ~512K calls
+                uint64_t hashes_now = s_stats.hashes;
+                Serial.printf("[S3-V3] calls=%u, hashes=%llu\n", s3_call_count, hashes_now);
+            }
+            #endif
+
+            if (!s_miningActive) break;
+
+            if (candidate) {
+                // BitsyMiner pattern: The assembly incremented nonce BEFORE exiting
+                uint32_t candidate_nonce_swapped = nonce_swapped - 1;
+                uint32_t candidate_nonce_native = __builtin_bswap32(candidate_nonce_swapped);
+
+                // BitsyMiner CRITICAL: Verify with SOFTWARE SHA on UNSWAPPED header
+                hbVerify.nonce = candidate_nonce_native;
+                if (miner_sha256_header(&sw_midstate, &ctx, &hbVerify)) {
+                    hashCheck(jobId, &ctx, hbVerify.timestamp, candidate_nonce_native);
+                }
+            }
+
+            // Yield periodically to prevent WDT
+            // The ASM function returns every ~65k hashes (on partial match),
+            // so we yield every 16 iterations (approx 1M hashes)
+            static uint32_t loop_iter = 0;
+            if (++loop_iter >= 16) {
+                loop_iter = 0;
+                esp_sha_release_hardware();
+                vTaskDelay(1);
+                esp_sha_acquire_hardware();
+            }
+        }
+
+        esp_sha_release_hardware();
+        s_core1Mining = false;
+        vTaskDelay(20 / portTICK_PERIOD_MS);
+    }
+}
+
 #else
-// Fallback for ESP32-S3/C3: Use sequential HAL-based mining with Midstate Optimization
+// Fallback for ESP32-C3/S2: Use sequential HAL-based mining with Midstate Optimization
 
 void miner_task_core1(void *param) {
     block_header_t hb;
@@ -684,8 +828,8 @@ void miner_task_core1(void *param) {
             hb.nonce++;
             s_stats.hashes++;
 
-            // Yield periodically to prevent WDT
-            if ((hb.nonce & 0x3FFFF) == 0) {
+            // Yield periodically to prevent WDT (every ~1M nonces)
+            if ((hb.nonce & 0xFFFFF) == 0) {
                 sha256_ll_release();
                 vTaskDelay(1);
                 sha256_ll_acquire();

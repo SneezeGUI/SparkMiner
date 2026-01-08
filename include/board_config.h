@@ -43,7 +43,14 @@
         #define USE_DISPLAY 1
     #endif
     #define DISPLAY_TYPE_TFT 1
+    // Undefine TFT dimensions if set by library, then set our values
+    #ifdef TFT_WIDTH
+        #undef TFT_WIDTH
+    #endif
     #define TFT_WIDTH 320
+    #ifdef TFT_HEIGHT
+        #undef TFT_HEIGHT
+    #endif
     #define TFT_HEIGHT 240
 
     // LED (RGB, active low)
@@ -83,7 +90,14 @@
         #define USE_DISPLAY 1
     #endif
     #define DISPLAY_TYPE_TFT 1
+    // Undefine TFT dimensions if set by library, then set our values
+    #ifdef TFT_WIDTH
+        #undef TFT_WIDTH
+    #endif
     #define TFT_WIDTH 320
+    #ifdef TFT_HEIGHT
+        #undef TFT_HEIGHT
+    #endif
     #define TFT_HEIGHT 240
 
     // LED
@@ -190,9 +204,10 @@
 #define MONITOR_STACK       10000
 
 // Stats API task
+// NOTE: Needs large stack for WiFiClientSecure SSL context (~10-15KB)
 #define STATS_CORE          CORE_0
 #define STATS_PRIORITY      1
-#define STATS_STACK         6000
+#define STATS_STACK         12000
 
 // ============================================================
 // Network Configuration

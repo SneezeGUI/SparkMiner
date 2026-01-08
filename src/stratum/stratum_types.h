@@ -24,22 +24,32 @@
 // Callback for submission response
 typedef void (*SubmitCallback)(uint32_t sessionId, uint32_t msgId, bool accepted, const char* reason);
 
+// Fixed sizes for stratum job fields (avoid heap fragmentation from String)
+#define STRATUM_JOB_ID_LEN      16      // Job ID (usually 4-8 hex chars)
+#define STRATUM_PREVHASH_LEN    68      // Previous block hash (64 hex + null)
+#define STRATUM_COINBASE1_LEN   512     // Coinbase part 1 (variable, can be large)
+#define STRATUM_COINBASE2_LEN   256     // Coinbase part 2
+#define STRATUM_EXTRANONCE_LEN  32      // Extra nonce (usually 8-16 hex)
+#define STRATUM_FIELD_LEN       12      // Version/nbits/ntime (8 hex + null)
+#define STRATUM_MAX_MERKLE      16      // Max merkle branches (usually < 10)
+
 /**
  * Stratum job from pool (mining.notify)
+ * Uses fixed char arrays to avoid heap fragmentation
  */
 typedef struct {
-    String jobId;           // Unique job identifier
-    String prevHash;        // Previous block hash (256-bit hex)
-    String coinBase1;       // Coinbase transaction part 1
-    String coinBase2;       // Coinbase transaction part 2
-    String extraNonce1;     // Pool-provided extra nonce
-    String extraNonce2;     // Miner-generated extra nonce
-    int extraNonce2Size;    // Size of extraNonce2 in bytes
-    JsonArray merkleBranch; // Merkle tree branches
-    String version;         // Block version (4 bytes hex)
-    String nbits;           // Difficulty target (4 bytes hex)
-    String ntime;           // Block timestamp (4 bytes hex)
-    bool cleanJobs;         // Clear pending jobs
+    char jobId[STRATUM_JOB_ID_LEN];         // Unique job identifier
+    char prevHash[STRATUM_PREVHASH_LEN];    // Previous block hash (256-bit hex)
+    char coinBase1[STRATUM_COINBASE1_LEN];  // Coinbase transaction part 1
+    char coinBase2[STRATUM_COINBASE2_LEN];  // Coinbase transaction part 2
+    char extraNonce1[STRATUM_EXTRANONCE_LEN]; // Pool-provided extra nonce
+    int extraNonce2Size;                    // Size of extraNonce2 in bytes
+    char merkleBranches[STRATUM_MAX_MERKLE][68]; // Merkle branches (64 hex + null each)
+    int merkleBranchCount;                  // Number of merkle branches
+    char version[STRATUM_FIELD_LEN];        // Block version (4 bytes hex)
+    char nbits[STRATUM_FIELD_LEN];          // Difficulty target (4 bytes hex)
+    char ntime[STRATUM_FIELD_LEN];          // Block timestamp (4 bytes hex)
+    bool cleanJobs;                         // Clear pending jobs
 } stratum_job_t;
 
 /**

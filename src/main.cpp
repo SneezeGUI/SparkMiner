@@ -58,12 +58,12 @@ void onButtonDoubleClick() {
 void onButtonMultiClick() {
     int clicks = button.getNumberClicks();
     if (clicks == 3) {
-        Serial.println("[BUTTON] Triple-click detected - toggling color inversion");
+        Serial.println("[BUTTON] Triple-click detected - toggling color theme");
         miner_config_t *config = nvs_config_get();
         config->invertColors = !config->invertColors;
         display_set_inverted(config->invertColors);
         nvs_config_save(config);
-        Serial.printf("[BUTTON] Color inversion %s and saved\n", config->invertColors ? "enabled" : "disabled");
+        Serial.printf("[BUTTON] Theme switched to %s mode\n", config->invertColors ? "Dark" : "Light");
     }
 }
 

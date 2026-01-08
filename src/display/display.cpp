@@ -47,6 +47,7 @@
 #define COLOR_SPARK1    0xFBE0  // Yellow-orange (spark glow)
 #define COLOR_SPARK2    0xFC60  // Amber (spark edge)
 #define COLOR_SUCCESS   0x07E0  // Green
+#define COLOR_WARNING   0xFE00  // Yellow-orange (warning/okay)
 #define COLOR_ERROR     0xF800  // Red
 #define COLOR_DIM       0x528A  // Darker gray
 #define COLOR_PANEL     0x10A2  // Very dark gray panel
@@ -147,6 +148,28 @@ static String formatDifficulty(double diff) {
     }
 }
 
+// Color coding helpers for status indicators
+// Returns: COLOR_SUCCESS (good), COLOR_WARNING (okay), COLOR_ERROR (bad)
+static uint16_t getPingColor(uint32_t latencyMs) {
+    if (latencyMs == 0) return COLOR_DIM;        // No data
+    if (latencyMs < 200) return COLOR_SUCCESS;   // Good: <200ms
+    if (latencyMs < 500) return COLOR_WARNING;   // Okay: 200-500ms
+    return COLOR_ERROR;                           // Bad: >500ms
+}
+
+static uint16_t getTempColor(float tempC) {
+    if (tempC < 50) return COLOR_SUCCESS;        // Good: <50C
+    if (tempC < 70) return COLOR_WARNING;        // Okay: 50-70C
+    return COLOR_ERROR;                           // Bad: >70C
+}
+
+static uint16_t getWifiColor(int rssi) {
+    if (rssi == 0) return COLOR_ERROR;           // Not connected
+    if (rssi > -60) return COLOR_SUCCESS;        // Excellent: >-60dBm
+    if (rssi > -75) return COLOR_WARNING;        // Okay: -60 to -75dBm
+    return COLOR_ERROR;                           // Bad: <-75dBm
+}
+
 // ============================================================
 // Spark Logo Drawing
 // ============================================================
@@ -238,36 +261,45 @@ static void drawHeader(const display_data_t *data) {
     s_tft.print("V");
     s_tft.print(getMajorVersion());
 
-    // Temperature (hide if screen too narrow)
-    if (w > 240 && !isPortrait) {
+    if (!isPortrait) {
+        // Status indicators (right side) - compact layout with color coding
+        // Layout: Temp | WAN | POOL (right to left from right edge)
+        s_tft.setTextSize(1);
+        int rightEdge = w - MARGIN;
+
+        // POOL status - rightmost (color coded by ping)
+        int poolX = rightEdge - 40;
+        s_tft.setTextColor(COLOR_DIM);
+        s_tft.setCursor(poolX, 6);
+        s_tft.print("POOL");
+        uint16_t pingColor = data->poolConnected ? getPingColor(data->avgLatency) : COLOR_ERROR;
+        s_tft.fillCircle(poolX + 6, 26, 5, pingColor);
+        if (data->poolConnected && data->avgLatency > 0) {
+            s_tft.setTextColor(pingColor);
+            s_tft.setCursor(poolX + 15, 22);
+            s_tft.print(data->avgLatency);
+        }
+
+        // WAN status - middle (color coded by signal strength)
+        int wanX = poolX - 45;
+        s_tft.setTextColor(COLOR_DIM);
+        s_tft.setCursor(wanX, 6);
+        s_tft.print("WAN");
+        uint16_t wifiColor = data->wifiConnected ? getWifiColor(data->wifiRssi) : COLOR_ERROR;
+        s_tft.fillCircle(wanX + 6, 26, 5, wifiColor);
+        if (data->wifiConnected) {
+            s_tft.setTextColor(wifiColor);
+            s_tft.setCursor(wanX + 15, 22);
+            s_tft.print(data->wifiRssi);
+        }
+
+        // Temperature - compact with color coding
         float temp = temperatureRead();
-        s_tft.setTextColor(COLOR_SPARK2);
-        s_tft.setCursor(190, 16);
+        uint16_t tempColor = getTempColor(temp);
+        s_tft.setTextColor(tempColor);
+        s_tft.setCursor(wanX - 28, 16);
         s_tft.print((int)temp);
         s_tft.print("C");
-    }
-
-    if (!isPortrait) {
-        // Status indicators (right side) with labels
-        s_tft.setTextSize(1);
-        int iconX = w - MARGIN - 12;
-
-        // Pool status
-        uint16_t poolColor = data->poolConnected ? COLOR_SUCCESS : COLOR_ERROR;
-        s_tft.setTextColor(COLOR_DIM);
-        s_tft.setCursor(iconX - 8, 4);
-        s_tft.print("POOL");
-        s_tft.fillCircle(iconX, 24, 6, poolColor);
-        s_tft.drawCircle(iconX, 24, 7, poolColor);
-        iconX -= 36;
-
-        // WiFi/WAN status
-        uint16_t wifiColor = data->wifiConnected ? COLOR_SUCCESS : COLOR_ERROR;
-        s_tft.setTextColor(COLOR_DIM);
-        s_tft.setCursor(iconX - 6, 4);
-        s_tft.print("WAN");
-        s_tft.fillCircle(iconX, 24, 6, wifiColor);
-        s_tft.drawCircle(iconX, 24, 7, wifiColor);
     }
 }
 
@@ -276,40 +308,58 @@ static void drawBottomStatusBar(const display_data_t *data) {
 
     int w = display_get_width();
     int h = display_get_height();
-    int barHeight = 35;
+    int barHeight = 32;  // Taller for labels + values
     int y = h - barHeight;
 
     // Draw panel background and border
     s_tft.fillRect(0, y, w, barHeight, COLOR_PANEL);
     s_tft.drawFastHLine(0, y, w, COLOR_SPARK2);
 
-    // Temperature
-    float temp = temperatureRead();
-    s_tft.setTextColor(COLOR_SPARK2);
     s_tft.setTextSize(1);
-    s_tft.setCursor(MARGIN + 10, y + 12);
+    int centerY = y + (barHeight / 2) - 4;
+
+    // Layout: evenly space 3 sections across width
+    // Section 1 (left): Temperature (color coded)
+    // Section 2 (center): WAN + indicator (color coded by signal)
+    // Section 3 (right): POOL + indicator (color coded by ping)
+    int sectionW = w / 3;
+
+    // Temperature on left - color coded with label
+    float temp = temperatureRead();
+    uint16_t tempColor = getTempColor(temp);
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(MARGIN, centerY - 6);
+    s_tft.print("TEMP");
+    s_tft.setTextColor(tempColor);
+    s_tft.setCursor(MARGIN, centerY + 6);
     s_tft.print((int)temp);
     s_tft.print("C");
 
-    // Calculate positions
-    int wanLabelX = w / 3 - 10;
-    int wanCircleX = wanLabelX + 30;
-    int poolLabelX = 2 * w / 3 - 10;
-    int poolCircleX = poolLabelX + 35;
-
-    // WAN Status
-    uint16_t wifiColor = data->wifiConnected ? COLOR_SUCCESS : COLOR_ERROR;
+    // WAN Status - center section (color coded by signal strength)
+    int wanX = sectionW;
     s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(wanLabelX, y + 12);
+    s_tft.setCursor(wanX, centerY - 6);
     s_tft.print("WAN");
-    s_tft.fillCircle(wanCircleX, y + 16, 6, wifiColor);
+    uint16_t wifiColor = data->wifiConnected ? getWifiColor(data->wifiRssi) : COLOR_ERROR;
+    s_tft.fillCircle(wanX + 4, centerY + 8, 4, wifiColor);
+    if (data->wifiConnected) {
+        s_tft.setTextColor(wifiColor);
+        s_tft.setCursor(wanX + 12, centerY + 4);
+        s_tft.print(data->wifiRssi);
+    }
 
-    // POOL Status
-    uint16_t poolColor = data->poolConnected ? COLOR_SUCCESS : COLOR_ERROR;
+    // POOL Status - right section (color coded by ping)
+    int poolX = sectionW * 2;
     s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(poolLabelX, y + 12);
+    s_tft.setCursor(poolX, centerY - 6);
     s_tft.print("POOL");
-    s_tft.fillCircle(poolCircleX, y + 16, 6, poolColor);
+    uint16_t pingColor = data->poolConnected ? getPingColor(data->avgLatency) : COLOR_ERROR;
+    s_tft.fillCircle(poolX + 4, centerY + 8, 4, pingColor);
+    if (data->poolConnected && data->avgLatency > 0) {
+        s_tft.setTextColor(pingColor);
+        s_tft.setCursor(poolX + 14, centerY + 4);
+        s_tft.print(data->avgLatency);
+    }
 }
 
 static void drawMiningScreen(const display_data_t *data) {
@@ -327,12 +377,14 @@ static void drawMiningScreen(const display_data_t *data) {
     s_tft.print(formatHashrate(data->hashRate));
 
     // Shares on right side of hashrate panel
+    // Portrait: shift further right to avoid hashrate overlap
+    int sharesX = isPortrait ? (w - 55) : (w - 100);
     s_tft.setTextSize(1);
     s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(w - 100, y + 4);
+    s_tft.setCursor(sharesX, y + 4);
     s_tft.print("Shares");
     s_tft.setTextColor(COLOR_FG);
-    s_tft.setCursor(w - 100, y + 16);
+    s_tft.setCursor(sharesX, y + 16);
     String shares = String(data->sharesAccepted) + "/" + String(data->sharesAccepted + data->sharesRejected);
     s_tft.print(shares);
 
@@ -420,20 +472,12 @@ static void drawMiningScreen(const display_data_t *data) {
 
     y += 14;
 
-    // IP address
+    // IP address (full width since ping moved to status bar)
     s_tft.setTextColor(COLOR_DIM);
     s_tft.setCursor(MARGIN + 2, y);
     s_tft.print("IP: ");
     s_tft.setTextColor(COLOR_FG);
     s_tft.print(data->ipAddress ? data->ipAddress : "---");
-
-    // Ping on right
-    s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(w - 90, y);
-    s_tft.print("Ping: ");
-    s_tft.setTextColor(COLOR_FG);
-    s_tft.print(data->avgLatency);
-    s_tft.print("ms");
 
     drawBottomStatusBar(data);
 }
@@ -479,7 +523,7 @@ static void drawStatsScreen(const display_data_t *data) {
     s_tft.setCursor(MARGIN + 2, y);
     s_tft.print("Network: ");
     s_tft.setTextColor(COLOR_FG);
-    s_tft.print(data->networkHashrate.length() > 0 ? data->networkHashrate : "---");
+    s_tft.print(strlen(data->networkHashrate) > 0 ? data->networkHashrate : "---");
 
     // Fee on right
     s_tft.setTextColor(COLOR_DIM);
@@ -495,7 +539,7 @@ static void drawStatsScreen(const display_data_t *data) {
     s_tft.setCursor(MARGIN + 2, y);
     s_tft.print("Difficulty: ");
     s_tft.setTextColor(COLOR_FG);
-    s_tft.print(data->networkDifficulty.length() > 0 ? data->networkDifficulty : "---");
+    s_tft.print(strlen(data->networkDifficulty) > 0 ? data->networkDifficulty : "---");
 
     y += 32;
 

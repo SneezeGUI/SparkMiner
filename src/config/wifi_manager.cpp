@@ -35,14 +35,20 @@ static WiFiManagerParameter* s_paramDifficulty = NULL;
 // Custom HTML parameters buffers
 static char s_rotationHtml[1024];
 static char s_invertHtml[512];
+static char s_brightnessHtml[512];
+static char s_difficultyHtml[768];
 static WiFiManagerParameter* s_paramRotation = NULL;
 static WiFiManagerParameter* s_paramInvert = NULL;
 
-// Buffers for numeric values
+// Stats API parameters
+static WiFiManagerParameter* s_paramStatsHeader = NULL;
+static WiFiManagerParameter* s_paramStatsProxy = NULL;
+static WiFiManagerParameter* s_paramHttpsStats = NULL;
+static char s_httpsStatsHtml[512];
+
+// Buffers for text inputs only
 static char s_bufPoolPort[8];
 static char s_bufBackupPort[8];
-static char s_bufBrightness[8];
-static char s_bufDifficulty[16];
 
 // ============================================================ 
 // Callbacks
@@ -102,6 +108,15 @@ static void saveParamsCallback() {
         if (config->targetDifficulty < 1e-9) config->targetDifficulty = 1e-9;
     }
 
+    // Stats API
+    if (s_paramStatsProxy) {
+        strncpy(config->statsProxyUrl, s_paramStatsProxy->getValue(), 127);
+        config->statsProxyUrl[127] = '\0';
+    }
+    if (s_paramHttpsStats) {
+        config->enableHttpsStats = (atoi(s_paramHttpsStats->getValue()) == 1);
+    }
+
     // Save to NVS
     if (nvs_config_save(config)) {
         Serial.println("[WIFI] Configuration saved successfully");
@@ -148,8 +163,6 @@ void wifi_manager_init() {
     // Prepare Buffers
     snprintf(s_bufPoolPort, sizeof(s_bufPoolPort), "%d", config->poolPort);
     snprintf(s_bufBackupPort, sizeof(s_bufBackupPort), "%d", config->backupPoolPort);
-    snprintf(s_bufBrightness, sizeof(s_bufBrightness), "%d", config->brightness);
-    snprintf(s_bufDifficulty, sizeof(s_bufDifficulty), "%.8f", config->targetDifficulty);
 
     // Create Parameters
     // We use 'new' to allocate persistent objects as WiFiManager stores pointers
@@ -165,18 +178,48 @@ void wifi_manager_init() {
     s_paramBackupWallet = new WiFiManagerParameter("bk_wallet", "Backup Wallet (optional)", config->backupWallet, MAX_WALLET_LEN);
     s_paramBackupPoolPassword = new WiFiManagerParameter("bk_pool_pass", "Backup Password", config->backupPoolPassword, MAX_PASSWORD_LEN);
 
-    s_paramBrightness = new WiFiManagerParameter("bright", "Brightness (0-100)", s_bufBrightness, 4);
-    s_paramDifficulty = new WiFiManagerParameter("diff", "Target Difficulty", s_bufDifficulty, 16);
+    // Brightness dropdown
+    const int brightValues[] = {10, 25, 50, 75, 100};
+    strcpy(s_brightnessHtml, "<br><select name='bright'>");
+    for(int i=0; i<5; i++) {
+        char opt[64];
+        sprintf(opt, "<option value='%d'%s>%d%%</option>",
+            brightValues[i],
+            (config->brightness == brightValues[i]) ? " selected" : "",
+            brightValues[i]);
+        strcat(s_brightnessHtml, opt);
+    }
+    strcat(s_brightnessHtml, "</select>");
+    s_paramBrightness = new WiFiManagerParameter("bright", "Brightness", "100", 4, s_brightnessHtml);
+    // Difficulty dropdown (common solo mining values)
+    const double diffValues[] = {0.00001, 0.0001, 0.001, 0.0014, 0.01, 0.1, 1.0};
+    const char* diffLabels[] = {"0.00001 (Easiest)", "0.0001", "0.001", "0.0014 (Default)", "0.01", "0.1", "1.0 (Hardest)"};
+    strcpy(s_difficultyHtml, "<br><select name='diff'>");
+    for(int i=0; i<7; i++) {
+        char opt[96];
+        // Check if current difficulty matches (within small epsilon)
+        bool selected = (config->targetDifficulty > diffValues[i] * 0.99 &&
+                        config->targetDifficulty < diffValues[i] * 1.01);
+        sprintf(opt, "<option value='%.6f'%s>%s</option>",
+            diffValues[i],
+            selected ? " selected" : "",
+            diffLabels[i]);
+        strcat(s_difficultyHtml, opt);
+    }
+    strcat(s_difficultyHtml, "</select>");
+    s_paramDifficulty = new WiFiManagerParameter("diff", "Target Difficulty", "0.0014", 10, s_difficultyHtml);
 
     // Custom HTML for Rotation
+    // TFT rotation: 0,2=Portrait, 1,3=Landscape
+    // USB position based on CYD board physical layout
     const char* rotLabels[] = {
-        "Portrait (USB Right)",
-        "Landscape (USB Bottom)",
-        "Portrait (USB Left)",
-        "Landscape (USB Top)"
+        "Portrait - USB Top (Default)",
+        "Landscape - USB Right",
+        "Portrait - USB Bottom",
+        "Landscape - USB Left"
     };
     
-    strcpy(s_rotationHtml, "<br><label>Screen Rotation</label><select name='rotation'>");
+    strcpy(s_rotationHtml, "<br><select name='rotation'>");
     for(int i=0; i<4; i++) {
         strcat(s_rotationHtml, "<option value='");
         char val[2]; sprintf(val, "%d", i);
@@ -188,17 +231,32 @@ void wifi_manager_init() {
         strcat(s_rotationHtml, "</option>");
     }
     strcat(s_rotationHtml, "</select>");
-    s_paramRotation = new WiFiManagerParameter("rotation", "Rotation", "0", 1, s_rotationHtml);
+    s_paramRotation = new WiFiManagerParameter("rotation", "Screen Rotation", "0", 2, s_rotationHtml);
 
-    // Custom HTML for Invert (using Select for reliability)
-    strcpy(s_invertHtml, "<label>Invert Colors</label><select name='invert'>");
-    strcat(s_invertHtml, "<option value='0'");
-    if(!config->invertColors) strcat(s_invertHtml, " selected");
-    strcat(s_invertHtml, ">Normal</option>");
+    // Custom HTML for Color Theme (Dark = default, Light = inverted off)
+    strcpy(s_invertHtml, "<br><select name='invert'>");
     strcat(s_invertHtml, "<option value='1'");
     if(config->invertColors) strcat(s_invertHtml, " selected");
-    strcat(s_invertHtml, ">Inverted</option></select>");
-    s_paramInvert = new WiFiManagerParameter("invert", "Invert", "0", 1, s_invertHtml);
+    strcat(s_invertHtml, ">Dark (Default)</option>");
+    strcat(s_invertHtml, "<option value='0'");
+    if(!config->invertColors) strcat(s_invertHtml, " selected");
+    strcat(s_invertHtml, ">Light</option></select>");
+    s_paramInvert = new WiFiManagerParameter("invert", "Color Theme", "1", 2, s_invertHtml);
+
+    // Stats API Settings
+    const char* statsHeader = "<br><h3>Stats API Settings</h3><div style='font-size:80%;color:#aaa'>Proxy offloads SSL from ESP32. Recommended for HTTPS.</div>";
+    s_paramStatsHeader = new WiFiManagerParameter(statsHeader);
+
+    s_paramStatsProxy = new WiFiManagerParameter("stats_proxy", "Proxy URL (http://host:port)", config->statsProxyUrl, 128);
+
+    strcpy(s_httpsStatsHtml, "<br><select name='https_stats'>");
+    strcat(s_httpsStatsHtml, "<option value='0'");
+    if(!config->enableHttpsStats) strcat(s_httpsStatsHtml, " selected");
+    strcat(s_httpsStatsHtml, ">Direct HTTPS: Disabled (Stable)</option>");
+    strcat(s_httpsStatsHtml, "<option value='1'");
+    if(config->enableHttpsStats) strcat(s_httpsStatsHtml, " selected");
+    strcat(s_httpsStatsHtml, ">Direct HTTPS: Enabled (Unstable)</option></select>");
+    s_paramHttpsStats = new WiFiManagerParameter("https_stats", "Direct HTTPS", "0", 2, s_httpsStatsHtml);
 
     // Configure WiFiManager
     s_wm.setDebugOutput(false);
@@ -240,6 +298,10 @@ void wifi_manager_init() {
     s_wm.addParameter(s_paramRotation);
     s_wm.addParameter(s_paramInvert);
 
+    s_wm.addParameter(s_paramStatsHeader);
+    s_wm.addParameter(s_paramStatsProxy);
+    s_wm.addParameter(s_paramHttpsStats);
+
     s_initialized = true;
     Serial.println("[WIFI] Manager initialized");
 }
@@ -275,8 +337,16 @@ void wifi_manager_blocking() {
 
         // Save WiFi credentials to our config
         strncpy(config->ssid, WiFi.SSID().c_str(), MAX_SSID_LENGTH);
+        config->ssid[MAX_SSID_LENGTH] = '\0';
         strncpy(config->wifiPassword, WiFi.psk().c_str(), MAX_PASSWORD_LEN);
-        nvs_config_save(config);
+        config->wifiPassword[MAX_PASSWORD_LEN] = '\0';
+
+        Serial.printf("[WIFI] Saving credentials for SSID: %s\n", config->ssid);
+        if (nvs_config_save(config)) {
+            Serial.println("[WIFI] Configuration saved to NVS successfully");
+        } else {
+            Serial.println("[WIFI] ERROR: Failed to save config to NVS!");
+        }
     } else {
         Serial.println("[WIFI] Connection failed or portal timed out");
 

@@ -62,6 +62,25 @@ bool IRAM_ATTR sha256_pipelined_mine(
     volatile bool *mining_flag
 );
 
+/**
+ * Optimized pipelined mining v2 with unrolled zeros.
+ *
+ * Optimizations over v1:
+ * - Unrolled zero loop (saves ~20 cycles per iteration)
+ * - Persistent zero register
+ * - Same functionality, slightly faster
+ *
+ * Note: ESP32 doesn't support midstate caching (no writable state registers)
+ * so block 1 must still be reloaded every iteration.
+ */
+bool IRAM_ATTR sha256_pipelined_mine_v2(
+    volatile uint32_t *sha_base,
+    const uint32_t *header_swapped,
+    uint32_t *nonce_ptr,
+    volatile uint64_t *hash_count_ptr,
+    volatile bool *mining_flag
+);
+
 #endif // CONFIG_IDF_TARGET_ESP32
 
 #ifdef __cplusplus

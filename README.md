@@ -1,10 +1,10 @@
-# SparkMiner v2.6.0
+# SparkMiner v2.8.0
 
-**High-performance dual-core Bitcoin solo miner for ESP32**
+**High-performance dual-core Bitcoin solo miner for ESP32 & ESP32-S3**
 
 <img src="images/1767589853452.jpg" alt="SparkMiner Display" width="575">
 
-SparkMiner is optimized firmware for the ESP32-2432S028 "Cheap Yellow Display" (CYD) board, delivering ~700 KH/s using hardware-accelerated SHA-256 and a pipelined assembly mining loop.
+SparkMiner is optimized firmware for ESP32-based boards with displays, delivering **~1+ MH/s** (pool-reported) using hardware-accelerated SHA-256 and pipelined assembly mining. Supports both ESP32 "Cheap Yellow Display" (CYD) boards and ESP32-S3 variants.
 
 > **Solo Mining Disclaimer:** Solo mining on an ESP32 is a lottery. The odds of finding a block are astronomically low (~1 in 10^20 per hash at current difficulty). This project is for education, fun, and supporting network decentralization - not profit.
 
@@ -63,14 +63,17 @@ python -m venv .venv
 # source .venv/bin/activate  # Linux/Mac
 pip install platformio
 
-# Use the interactive flash tool (recommended)
-python flash.py
+# Use the interactive devtool (recommended)
+devtool.bat          # Windows - interactive menu
+python devtool.py    # Cross-platform
 
 # Or build a specific board directly
-pio run -e esp32-2432s028-2usb -t upload
+python devtool.py build -b cyd-2usb
+python devtool.py flash -b cyd-2usb
+python devtool.py monitor
 
-# Monitor serial output
-pio device monitor
+# All-in-one: build, flash, and monitor
+python devtool.py all -b cyd-2usb
 ```
 
 ---
@@ -88,19 +91,21 @@ Understanding the difference between the firmware files:
 
 ### Supported Boards
 
-| Board | Env | Firmware | Notes |
-|-------|-----|----------|-------|
-| ESP32-2432S028R | `esp32-2432s028` | `esp32-2432s028_*.bin` | Standard CYD (1-USB) |
-| ESP32-2432S028R 2-USB | `esp32-2432s028-2usb` | `esp32-2432s028-2usb_*.bin` | CYD with dual USB ports |
-| ESP32-2432S028R ST7789 | `esp32-2432s028-st7789` | `esp32-2432s028-st7789_*.bin` | Alt display driver (rare) |
-| Freenove ESP32-S3 | `esp32-s3-2432s028` | `esp32-s3-2432s028_*.bin` | FNK0104 with 2.8" display, SD_MMC |
-| ESP32-S3 DevKit | `esp32-s3-devkit` | `esp32-s3-devkit_*.bin` | Headless with PSRAM |
-| ESP32 Headless | `esp32-headless` | `esp32-headless_*.bin` | No display, serial only |
+| Board | Environment | Chip | Display | Price | Notes |
+|-------|-------------|------|---------|-------|-------|
+| **ESP32-2432S028R** | `esp32-2432s028` | ESP32-WROOM-32 | 2.8" ILI9341 | $4-16 | Standard CYD (1-USB), most common |
+| **ESP32-2432S028R 2-USB** | `esp32-2432s028-2usb` | ESP32-WROOM-32 | 2.8" ILI9341 | $4-16 | CYD with dual USB (Type-C + Micro) |
+| **ESP32-2432S028R ST7789** | `esp32-2432s028-st7789` | ESP32-WROOM-32E | 2.8" ST7789 | $4-16 | Alternative display driver variant |
+| **Freenove FNK0104** | `esp32-s3-2432s028` | ESP32-S3 | 2.8" IPS | $18-23 | S3 with 8MB Flash, 8MB PSRAM, SD_MMC |
+| **ESP32-S3 DevKitC-1** | `esp32-s3-devkit` | ESP32-S3 | None | $12-18 | Headless with PSRAM, USB-OTG |
+| **ESP32 Headless** | `esp32-headless` | ESP32-WROOM-32 | None | $5-10 | Any generic ESP32 dev board |
+| **Lolin S3 Mini** | `esp32-s3-mini` | ESP32-S3FH4R2 | None | $5-20 | Compact form factor, RGB LED |
 
 ### Where to Buy
 
-- **AliExpress:** Search "ESP32-2432S028" (~$10-15 USD)
-- **Amazon:** Search "CYD ESP32 2.8 inch" (~$15-20 USD)
+- **AliExpress:** Search "ESP32-2432S028" for CYD boards (~$4-16 USD)
+- **Amazon:** Search "CYD ESP32 2.8 inch" or "Freenove ESP32-S3" (~$15-25 USD)
+- **Freenove Store:** [FNK0104 ESP32-S3 Display](https://store.freenove.com/) (~$20 USD)
 
 ### Hardware Features
 
@@ -265,20 +270,26 @@ Large time display with mining summary at bottom.
 
 ### Expected Hashrates
 
-| Board | Hashrate | Power | Notes |
-|-------|----------|-------|-------|
-| ESP32-2432S028 (CYD) | ~700 KH/s | ~0.5W | With display |
-| ESP32-S3 | ~800 KH/s | ~0.4W | No display overhead |
-| ESP32 Headless | ~750 KH/s | ~0.3W | Serial only |
+| Board | Device Display | Pool Reported | Power | Notes |
+|-------|---------------|---------------|-------|-------|
+| **ESP32-2432S028 (CYD)** | ~715-725 KH/s | ~715-725 KH/s | ~0.5W | Pipelined assembly v2 |
+| **ESP32-S3 (Freenove)** | ~280 KH/s | ~400 KH/s | ~0.4W | Midstate caching v3 |
+| **ESP32 Headless** | ~750 KH/s | ~750 KH/s | ~0.3W | No display overhead |
+
+> **Note:** Pool-reported hashrate is typically higher than device display due to share submission timing and pool difficulty adjustments.
 
 ### Architecture
 
 SparkMiner uses both ESP32 cores efficiently:
 
-- **Core 1 (High Priority):** Pipelined hardware SHA-256 mining using direct register access
-- **Core 0 (Low Priority):** WiFi, Stratum protocol, display, and software SHA-256 mining
+- **Core 1 (High Priority, 19):** Pipelined hardware SHA-256 mining using direct register access and assembly optimization
+- **Core 0 (Low Priority, 1):** WiFi, Stratum protocol, display updates, and software SHA-256 backup mining
 
-This dual-core approach maximizes hashrate while maintaining responsive UI and network connectivity.
+**v2.7.0 Optimizations:**
+- Pipelined assembly v2 with unrolled zero loops (~20 cycles saved per hash)
+- Increased yield intervals (4x fewer context switches)
+- Memory leak fixes (StaticJsonDocument, fixed char arrays)
+- Stable heap usage for long-term operation
 
 ---
 
@@ -328,33 +339,36 @@ screen /dev/ttyUSB0 115200
 - Python 3.8+
 - Git
 
-### Interactive Flash Tool (Recommended)
+### DevTool (Recommended)
 
-SparkMiner includes a unified flash tool that supports all boards with an interactive menu:
+SparkMiner includes a unified development tool that supports all boards with an interactive menu:
 
 ```bash
-# Interactive mode - select board, build, flash, monitor
-python flash.py
-
-# Or use the batch file on Windows
-flash.bat
+# Interactive menu - select board, build, flash, monitor
+devtool.bat              # Windows
+python devtool.py        # Cross-platform
 
 # List all supported boards
-python flash.py --list
+python devtool.py --help
 
-# Select a specific board
-python flash.py --board cyd-2usb
-python flash.py --board freenove-s3
-python flash.py --board esp32-headless
-
-# Build, flash, and monitor in one command
-python flash.py --board cyd-2usb --all
-
-# Build only
-python flash.py --board freenove-s3 --build
+# Build specific board
+python devtool.py build -b cyd-2usb
+python devtool.py build -b freenove-s3
 
 # Flash to specific port
-python flash.py --board cyd-2usb --flash COM5
+python devtool.py flash -b cyd-2usb -p COM5
+
+# Monitor serial output
+python devtool.py monitor -p COM5
+
+# All-in-one: build, flash, and monitor
+python devtool.py all -b cyd-2usb -p COM5
+
+# Build release firmware for all boards
+python devtool.py release
+
+# Flash custom firmware file (opens file browser)
+python devtool.py        # Select [F] from menu
 ```
 
 **ESP32-S3 Note:** The Freenove ESP32-S3 requires manual bootloader mode entry:
@@ -409,15 +423,15 @@ SparkMiner/
 │   ├── mining/               # SHA-256 implementations
 │   │   ├── miner.cpp         # Mining coordinator
 │   │   ├── sha256_hw.cpp     # Hardware SHA (registers)
-│   │   ├── sha256_pipelined.cpp  # Pipelined assembly
-│   │   └── sha256_soft.cpp   # Software SHA (Core 0)
+│   │   └── sha256_pipelined.h # Pipelined assembly
 │   ├── stats/                # Live stats & monitoring
 │   └── stratum/              # Stratum v1 protocol
 ├── include/
 │   └── board_config.h        # Hardware definitions
-├── flash.py                  # Universal build & flash tool
-├── flash.bat                 # Windows launcher for flash.py
-├── platformio.ini            # Build configuration
+├── devtool.py                # Unified build/flash/monitor tool
+├── devtool.bat               # Windows launcher
+├── devtool.toml              # Board & project configuration
+├── platformio.ini            # PlatformIO build settings
 └── README.md
 ```
 

@@ -1,0 +1,131 @@
+# ============================================================
+# ESP32 DevTool Configuration
+# ============================================================
+# This file configures the unified build/flash/monitor tool.
+# Copy this file to your project and customize for your boards.
+# ============================================================
+
+[project]
+name = "SparkMiner"
+description = "Bitcoin miner for ESP32 devices"
+# Version source: "git" (from tags) or "file" (from version.txt)
+version_source = "git"
+# Firmware output directory
+firmware_dir = "firmware"
+# PlatformIO project directory (relative to this file)
+pio_dir = "."
+
+[defaults]
+# Default board if none specified
+board = "cyd-2usb"
+# Default baud rates
+flash_baud = 921600
+monitor_baud = 115200
+# Flash settings
+flash_mode = "dio"
+flash_freq = "80m"
+
+# ============================================================
+# Board Definitions
+# ============================================================
+# Each board needs:
+#   - name: Display name
+#   - env: PlatformIO environment name
+#   - chip: ESP chip (esp32, esp32s3, esp32c3, etc.)
+#   - description: Short description
+# Optional:
+#   - flash_baud, monitor_baud, flash_mode, flash_freq
+#   - needs_boot_mode: true if manual bootloader required
+#   - port_changes_on_reset: true if COM port changes after reset
+#   - boot_button, reset_button: button names for instructions
+# ============================================================
+
+[boards.cyd-1usb]
+name = "CYD 1-USB (ILI9341)"
+env = "esp32-2432s028"
+chip = "esp32"
+description = "ESP32-2432S028 with single USB port, ILI9341 display"
+flash_freq = "40m"
+needs_boot_mode = false
+group = "CYD (Cheap Yellow Display)"
+
+[boards.cyd-1usb-st7789]
+name = "CYD 1-USB (ST7789)"
+env = "esp32-2432s028-st7789"
+chip = "esp32"
+description = "ESP32-2432S028 variant with ST7789 display driver"
+flash_freq = "40m"
+needs_boot_mode = false
+group = "CYD (Cheap Yellow Display)"
+
+[boards.cyd-2usb]
+name = "CYD 2-USB"
+env = "esp32-2432s028-2usb"
+chip = "esp32"
+description = "ESP32-2432S028 with dual USB ports (flash via USB-to-Serial)"
+flash_freq = "40m"
+needs_boot_mode = false
+group = "CYD (Cheap Yellow Display)"
+
+[boards.freenove-s3]
+name = "Freenove ESP32-S3 Display"
+env = "esp32-s3-2432s028"
+chip = "esp32s3"
+description = "Freenove FNK0104 with 2.8\" ILI9341, SD_MMC, USB-C"
+needs_boot_mode = true
+port_changes_on_reset = true
+group = "ESP32-S3 Display"
+
+[boards.esp32-headless]
+name = "ESP32 Headless"
+env = "esp32-headless"
+chip = "esp32"
+description = "Generic ESP32 without display (serial output only)"
+flash_freq = "40m"
+needs_boot_mode = false
+group = "Headless (No Display)"
+
+[boards.esp32-s3-devkit]
+name = "ESP32-S3 DevKit"
+env = "esp32-s3-devkit"
+chip = "esp32s3"
+description = "ESP32-S3 DevKitC-1 headless with PSRAM"
+needs_boot_mode = true
+port_changes_on_reset = true
+group = "Headless (No Display)"
+
+[boards.esp32-s3-mini]
+name = "ESP32-S3 Mini"
+env = "esp32-s3-mini"
+chip = "esp32s3"
+description = "Wemos/Lolin S3 Mini with RGB LED"
+needs_boot_mode = true
+port_changes_on_reset = true
+group = "Headless (No Display)"
+
+# ============================================================
+# Release Settings
+# ============================================================
+
+[release]
+# Boards to include in release builds (default: all)
+# boards = ["cyd-1usb", "cyd-2usb", "freenove-s3"]
+# Enable parallel builds for faster release
+parallel = false
+# Number of releases to keep when pruning
+keep_releases = 5
+# Output naming: {env}_factory.bin, {env}_firmware.bin
+factory_suffix = "_factory.bin"
+firmware_suffix = "_firmware.bin"
+
+# ============================================================
+# Monitor Settings
+# ============================================================
+
+[monitor]
+# Filters for platformio device monitor
+filters = ["colorize", "esp32_exception_decoder", "time"]
+# Auto-reconnect on disconnect
+auto_reconnect = true
+# Log to file (empty = disabled)
+log_file = ""

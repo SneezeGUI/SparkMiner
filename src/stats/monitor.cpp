@@ -15,29 +15,50 @@
 #include "../config/wifi_manager.h"
 
 // Update intervals
-#define DISPLAY_UPDATE_MS   1000   // 1 second
-#define STATS_UPDATE_MS     10000  // 10 seconds
+#define DISPLAY_UPDATE_MS   1000    // 1 second
+#define STATS_UPDATE_MS     10000   // 10 seconds
+#define PERSIST_STATS_MS    3600000 // 1 hour - save to flash for persistence
+#define EARLY_SAVE_MS       300000  // 5 minutes - initial save interval before first hourly
 
 static bool s_initialized = false;
 static uint32_t s_lastDisplayUpdate = 0;
 static uint32_t s_lastStatsUpdate = 0;
+static uint32_t s_lastPersistSave = 0;
 static uint32_t s_startTime = 0;
+static bool s_earlySaveDone = false;      // Track if we've done the early save
+static uint32_t s_lastAcceptedCount = 0;  // Track shares for first-share save
+
+// Track session start values to calculate deltas for persistence
+static uint64_t s_sessionStartHashes = 0;
+static uint32_t s_sessionStartShares = 0;
+static uint32_t s_sessionStartAccepted = 0;
+static uint32_t s_sessionStartRejected = 0;
+static uint32_t s_sessionStartBlocks = 0;
 
 // ============================================================
 // Helper Functions
 // ============================================================
 
 static void updateDisplayData(display_data_t *data) {
-    // Get mining stats
+    // Get mining stats (current session)
     mining_stats_t *mstats = miner_get_stats();
 
-    data->totalHashes = mstats->hashes;
-    data->bestDifficulty = mstats->bestDifficulty;
-    data->sharesAccepted = mstats->accepted;
-    data->sharesRejected = mstats->rejected;
+    // Get persistent lifetime stats
+    mining_persistence_t *pstats = nvs_stats_get();
+
+    // Display lifetime totals (persistent + current session)
+    data->totalHashes = pstats->lifetimeHashes + mstats->hashes;
+    data->sharesAccepted = pstats->lifetimeAccepted + mstats->accepted;
+    data->sharesRejected = pstats->lifetimeRejected + mstats->rejected;
+    data->blocksFound = pstats->lifetimeBlocks + mstats->blocks;
+
+    // Best difficulty: max of lifetime best and current session best
+    data->bestDifficulty = (mstats->bestDifficulty > pstats->bestDifficultyEver)
+                           ? mstats->bestDifficulty : pstats->bestDifficultyEver;
+
+    // Session-only values (these make sense per-session)
     data->templates = mstats->templates;
     data->blocks32 = mstats->matches32;
-    data->blocksFound = mstats->blocks;
     data->uptimeSeconds = (millis() - s_startTime) / 1000;
     data->avgLatency = mstats->avgLatency;
 
@@ -81,6 +102,7 @@ static void updateDisplayData(display_data_t *data) {
 
     // Network info
     data->wifiConnected = (WiFi.status() == WL_CONNECTED);
+    data->wifiRssi = data->wifiConnected ? WiFi.RSSI() : 0;
     data->ipAddress = wifi_manager_get_ip();
 
     // Live stats
@@ -93,8 +115,11 @@ static void updateDisplayData(display_data_t *data) {
         data->blockHeight = lstats->blockHeight;
     }
     if (lstats->networkValid) {
-        data->networkHashrate = lstats->networkHashrate;
-        data->networkDifficulty = lstats->networkDifficulty;
+        // Use strncpy for fixed char arrays (no heap allocation)
+        strncpy(data->networkHashrate, lstats->networkHashrate, sizeof(data->networkHashrate) - 1);
+        data->networkHashrate[sizeof(data->networkHashrate) - 1] = '\0';
+        strncpy(data->networkDifficulty, lstats->networkDifficulty, sizeof(data->networkDifficulty) - 1);
+        data->networkDifficulty[sizeof(data->networkDifficulty) - 1] = '\0';
     }
     if (lstats->feesValid) {
         data->halfHourFee = lstats->halfHourFee;
@@ -103,8 +128,11 @@ static void updateDisplayData(display_data_t *data) {
     // Pool stats (from API)
     if (lstats->poolValid) {
         data->poolWorkersTotal = lstats->poolWorkersCount;
-        data->poolHashrate = lstats->poolTotalHashrate;
-        data->addressBestDiff = lstats->poolBestDifficulty;
+        // Use strncpy for fixed char arrays (no heap allocation)
+        strncpy(data->poolHashrate, lstats->poolTotalHashrate, sizeof(data->poolHashrate) - 1);
+        data->poolHashrate[sizeof(data->poolHashrate) - 1] = '\0';
+        strncpy(data->addressBestDiff, lstats->poolBestDifficulty, sizeof(data->addressBestDiff) - 1);
+        data->addressBestDiff[sizeof(data->addressBestDiff) - 1] = '\0';
         // poolWorkersAddress would need separate API call for per-address count
         data->poolWorkersAddress = 1;  // Current device counts as 1
     }
@@ -120,6 +148,11 @@ void monitor_init() {
     // Initialize live stats
     live_stats_init();
 
+    // Load persistent stats from NVS (initializes session count)
+    mining_persistence_t *pstats = nvs_stats_get();
+    Serial.printf("[MONITOR] Session #%lu | Lifetime: %llu hashes, %lu shares\n",
+                  pstats->sessionCount, pstats->lifetimeHashes, pstats->lifetimeShares);
+
     // Set wallet for pool stats
     miner_config_t *config = nvs_config_get();
     if (config->wallet[0]) {
@@ -130,6 +163,7 @@ void monitor_init() {
     // (before WiFi setup, so we can show AP config screen)
 
     s_startTime = millis();
+    s_lastPersistSave = millis();
     s_initialized = true;
 
     Serial.println("[MONITOR] Initialized");
@@ -184,16 +218,77 @@ void monitor_task(void *param) {
                         displayData.halfHourFee);
                 }
 
-                // Heap monitoring - warn if low memory (below 50KB)
+                // Heap monitoring - track memory usage over time
                 uint32_t freeHeap = ESP.getFreeHeap();
-                if (freeHeap < 50000) {
-                    Serial.printf("[HEAP] WARNING: Low memory - %lu bytes free\n", freeHeap);
+                uint32_t minFreeHeap = ESP.getMinFreeHeap();
+                uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
+
+                // Always log heap stats for debugging memory leaks
+                Serial.printf("[HEAP] Free: %lu | Min: %lu | MaxAlloc: %lu\n",
+                    freeHeap, minFreeHeap, maxAllocHeap);
+
+                // Warn if critically low (under 30KB)
+                if (freeHeap < 30000) {
+                    Serial.println("[HEAP] CRITICAL: Memory very low - may crash soon!");
+                } else if (freeHeap < 50000) {
+                    Serial.println("[HEAP] WARNING: Memory getting low");
                 }
 
                 lastSerialPrint = now;
             }
 
             s_lastDisplayUpdate = now;
+        }
+
+        // Persistence save logic with early save for new sessions
+        // - Save on first accepted share (immediate feedback)
+        // - Save every 5 minutes until first hourly save
+        // - Save every hour after that (flash wear-leveling)
+        mining_stats_t *mstats = miner_get_stats();
+        bool shouldSave = false;
+        const char *saveReason = nullptr;
+
+        // Check for first share save (one-time trigger)
+        if (!s_earlySaveDone && mstats->accepted > 0 && s_lastAcceptedCount == 0) {
+            shouldSave = true;
+            saveReason = "first share";
+            s_lastAcceptedCount = mstats->accepted;
+        }
+
+        // Check for periodic save (early interval or standard interval)
+        uint32_t saveInterval = s_earlySaveDone ? PERSIST_STATS_MS : EARLY_SAVE_MS;
+        if (now - s_lastPersistSave >= saveInterval) {
+            shouldSave = true;
+            saveReason = s_earlySaveDone ? "hourly" : "early";
+            if (!s_earlySaveDone) {
+                s_earlySaveDone = true;  // Switch to hourly saves after first early save
+            }
+        }
+
+        if (shouldSave) {
+            uint32_t sessionSeconds = (now - s_startTime) / 1000;
+
+            // Calculate session deltas (hashes added since last save)
+            uint64_t sessionHashes = mstats->hashes - s_sessionStartHashes;
+            uint32_t sessionShares = mstats->shares - s_sessionStartShares;
+            uint32_t sessionAccepted = mstats->accepted - s_sessionStartAccepted;
+            uint32_t sessionRejected = mstats->rejected - s_sessionStartRejected;
+            uint32_t sessionBlocks = mstats->blocks - s_sessionStartBlocks;
+
+            // Update persistent stats
+            nvs_stats_update(sessionHashes, sessionShares, sessionAccepted,
+                            sessionRejected, sessionBlocks, sessionSeconds,
+                            mstats->bestDifficulty);
+
+            // Update session start values for next delta calculation
+            s_sessionStartHashes = mstats->hashes;
+            s_sessionStartShares = mstats->shares;
+            s_sessionStartAccepted = mstats->accepted;
+            s_sessionStartRejected = mstats->rejected;
+            s_sessionStartBlocks = mstats->blocks;
+
+            Serial.printf("[MONITOR] Stats saved to NVS (%s)\n", saveReason);
+            s_lastPersistSave = now;
         }
 
         vTaskDelay(100 / portTICK_PERIOD_MS);

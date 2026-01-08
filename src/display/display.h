@@ -18,6 +18,7 @@
 #define SCREEN_AP_CONFIG    3
 
 // Display data structures
+// NOTE: Using fixed char arrays instead of Arduino String to prevent heap fragmentation
 typedef struct {
     // Mining stats
     uint64_t totalHashes;
@@ -36,21 +37,22 @@ typedef struct {
     const char *poolName;
     double poolDifficulty;
 
-    // Pool stats (from API)
+    // Pool stats (from API) - fixed char arrays
     int poolWorkersTotal;       // Total workers on pool
     int poolWorkersAddress;     // Workers on your address
-    String poolHashrate;        // Pool total hashrate
-    String addressBestDiff;     // Your best difficulty on pool
+    char poolHashrate[24];      // Pool total hashrate
+    char addressBestDiff[24];   // Your best difficulty on pool
 
     // Network info
     bool wifiConnected;
+    int8_t wifiRssi;            // WiFi signal strength in dBm
     const char *ipAddress;
 
-    // Live stats (from API)
+    // Live stats (from API) - fixed char arrays
     float btcPrice;
     uint32_t blockHeight;
-    String networkHashrate;
-    String networkDifficulty;
+    char networkHashrate[24];
+    char networkDifficulty[24];
     int halfHourFee;
 
 } display_data_t;

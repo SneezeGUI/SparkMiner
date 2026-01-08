@@ -66,10 +66,15 @@ void sha256_ll_release(void) {
 }
 
 void IRAM_ATTR sha256_ll_wait_idle(void) {
+    uint32_t timeout = 20000;
 #if defined(CONFIG_IDF_TARGET_ESP32)
-    while (DPORT_REG_READ(SHA_256_BUSY_REG)) {}
+    while (DPORT_REG_READ(SHA_256_BUSY_REG)) {
+        if (--timeout == 0) break;
+    }
 #else
-    while (REG_READ(SHA_BUSY_REG)) {}
+    while (REG_READ(SHA_BUSY_REG)) {
+        if (--timeout == 0) break;
+    }
 #endif
 }
 
@@ -198,8 +203,8 @@ static inline void IRAM_ATTR ll_fill_second_block(const uint8_t *tail, uint32_t 
     REG_WRITE(&reg[0], data_words[0]);
     REG_WRITE(&reg[1], data_words[1]);
     REG_WRITE(&reg[2], data_words[2]);
-    REG_WRITE(&reg[3], nonce);
-    REG_WRITE(&reg[4], 0x00000080);
+    REG_WRITE(&reg[3], __builtin_bswap32(nonce));  // Nonce must be byte-swapped (same as ESP32)
+    REG_WRITE(&reg[4], 0x80000000);   // Padding in BE format (same as ESP32)
     REG_WRITE(&reg[5], 0x00000000);
     REG_WRITE(&reg[6], 0x00000000);
     REG_WRITE(&reg[7], 0x00000000);
@@ -210,7 +215,7 @@ static inline void IRAM_ATTR ll_fill_second_block(const uint8_t *tail, uint32_t 
     REG_WRITE(&reg[12], 0x00000000);
     REG_WRITE(&reg[13], 0x00000000);
     REG_WRITE(&reg[14], 0x00000000);
-    REG_WRITE(&reg[15], 0x80020000);  // 640 bits, different byte order
+    REG_WRITE(&reg[15], 0x00000280);  // 640 bits in BE format (same as ESP32)
 }
 
 static inline void IRAM_ATTR ll_write_digest(const uint32_t *midstate) {
@@ -241,35 +246,41 @@ static inline void IRAM_ATTR ll_fill_inter_block(void) {
     REG_WRITE(&reg[7], DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 7 * 4));
     DPORT_INTERRUPT_RESTORE();
 
-    REG_WRITE(&reg[8], 0x00000080);
+    REG_WRITE(&reg[8], 0x80000000);   // Padding in BE format (same as ESP32)
     REG_WRITE(&reg[9], 0x00000000);
     REG_WRITE(&reg[10], 0x00000000);
     REG_WRITE(&reg[11], 0x00000000);
     REG_WRITE(&reg[12], 0x00000000);
     REG_WRITE(&reg[13], 0x00000000);
     REG_WRITE(&reg[14], 0x00000000);
-    REG_WRITE(&reg[15], 0x00010000);  // 256 bits
+    REG_WRITE(&reg[15], 0x00000100);  // 256 bits in BE format (same as ESP32)
 }
 
 static inline bool IRAM_ATTR ll_read_digest_if(uint8_t *hash_out) {
     DPORT_INTERRUPT_DISABLE();
-    uint32_t last = DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 7 * 4);
 
-    // Early 16-bit reject
-    if ((uint16_t)(last >> 16) != 0) {
+    // Read H0 (MSB) first for early check - H0 contains leading zeros for valid shares
+    uint32_t h0 = DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 0 * 4);
+
+    // Early 16-bit reject: check upper 16 bits of H0 (MSB of hash)
+    if ((h0 >> 16) != 0) {
         DPORT_INTERRUPT_RESTORE();
         return false;
     }
 
+    // Read full hash WITH byte-swap (same as ESP32 - S3 hardware stores in BE format)
+    // Matches working sha256_s3.cpp implementation
+    // out[7] = H0 (MSB, bytes 28-31) - contains leading zeros
+    // out[0] = H7 (LSB, bytes 0-3)
     uint32_t *out = (uint32_t *)hash_out;
-    out[7] = last;
-    out[0] = DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 0 * 4);
-    out[1] = DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 1 * 4);
-    out[2] = DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 2 * 4);
-    out[3] = DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 3 * 4);
-    out[4] = DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 4 * 4);
-    out[5] = DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 5 * 4);
-    out[6] = DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 6 * 4);
+    out[7] = __builtin_bswap32(h0);  // H0 -> out[7] (MSB at high bytes)
+    out[6] = __builtin_bswap32(DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 1 * 4));  // H1 -> out[6]
+    out[5] = __builtin_bswap32(DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 2 * 4));  // H2 -> out[5]
+    out[4] = __builtin_bswap32(DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 3 * 4));  // H3 -> out[4]
+    out[3] = __builtin_bswap32(DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 4 * 4));  // H4 -> out[3]
+    out[2] = __builtin_bswap32(DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 5 * 4));  // H5 -> out[2]
+    out[1] = __builtin_bswap32(DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 6 * 4));  // H6 -> out[1]
+    out[0] = __builtin_bswap32(DPORT_SEQUENCE_REG_READ(SHA_H_BASE + 7 * 4));  // H7 -> out[0] (LSB at low bytes)
     DPORT_INTERRUPT_RESTORE();
 
     return true;
@@ -308,10 +319,28 @@ void IRAM_ATTR sha256_ll_midstate(uint32_t *midstate, const uint8_t *header) {
     DPORT_INTERRUPT_RESTORE();
 
 #else
-    // ESP32-S3/C3: Use HAL to compute initial block
-    sha_hal_hash_block(SHA2_256, header, 64/4, true);
+    // ESP32-S3/C3: Use Direct Register Access (No HAL)
+    // Replaces sha_hal_hash_block to avoid HAL state conflicts
+    
+    // 1. Fill first block
+    uint32_t *data_words = (uint32_t *)header;
+    uint32_t *reg = (uint32_t *)(SHA_TEXT_BASE);
+    
+    for (int i=0; i<16; i++) {
+        REG_WRITE(&reg[i], data_words[i]);
+    }
+    
+    // 2. Start (Fresh)
+    REG_WRITE(SHA_MODE_REG, SHA2_256);
+    REG_WRITE(SHA_START_REG, 1);
+    
     sha256_ll_wait_idle();
-    sha_hal_read_digest(SHA2_256, midstate);
+    
+    // 3. Read Digest
+    uint32_t *h_reg = (uint32_t *)(SHA_H_BASE);
+    for (int i=0; i<8; i++) {
+        midstate[i] = REG_READ(&h_reg[i]);
+    }
 #endif
 }
 
@@ -381,18 +410,24 @@ bool IRAM_ATTR sha256_ll_double_hash(const uint32_t *midstate, const uint8_t *ta
     return ll_read_digest_if(hash_out);
 
 #else
-    // ESP32-S3/C3 implementation
+    // ESP32-S3/C3 implementation (matches working sha256_s3.cpp)
+    // 1. Restore midstate to SHA_H_BASE
     ll_write_digest(midstate);
-    ll_fill_second_block(tail, nonce);
-    REG_WRITE(SHA_CONTINUE_REG, 1);
 
-    sha_ll_load(SHA2_256);
+    // 2. Fill second block (tail + nonce + padding)
+    ll_fill_second_block(tail, nonce);
+
+    // 3. Start first SHA (continue mode - uses midstate from SHA_H_BASE)
+    REG_WRITE(SHA_MODE_REG, SHA2_256);
+    REG_WRITE(SHA_CONTINUE_REG, 1);
     sha256_ll_wait_idle();
 
+    // 4. Copy first hash result to TEXT_BASE for second hash
     ll_fill_inter_block();
-    REG_WRITE(SHA_START_REG, 1);
 
-    sha_ll_load(SHA2_256);
+    // 5. Start second SHA (fresh mode)
+    REG_WRITE(SHA_MODE_REG, SHA2_256);
+    REG_WRITE(SHA_START_REG, 1);
     sha256_ll_wait_idle();
 
     return ll_read_digest_if(hash_out);

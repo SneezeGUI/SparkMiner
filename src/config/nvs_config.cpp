@@ -13,21 +13,24 @@
 #include "../stratum/stratum_types.h"
 
 // SD card support - use SD_MMC for ESP32-S3 CYD, SPI SD for others
-#ifdef USE_SD_MMC
+// Headless boards don't have SD card support
+#if defined(USE_SD_MMC)
     #include <SD_MMC.h>
     #define SD_FS SD_MMC
-#else
+    #define HAS_SD_CARD 1
+#elif defined(SD_CS_PIN)
     #include <SD.h>
     #include <SPI.h>
     #define SD_FS SD
-    // SD card CS pin for SPI mode
-    #ifndef SD_CS_PIN
-        #define SD_CS_PIN 5
-    #endif
+    #define HAS_SD_CARD 1
+#else
+    // No SD card support (headless builds)
+    #define HAS_SD_CARD 0
 #endif
 
-// Config file path on SD card
+// File paths on SD card
 #define CONFIG_FILE_PATH "/config.json"
+#define STATS_FILE_PATH "/stats.json"
 
 // NVS namespace
 #define NVS_NAMESPACE "sparkminer"
@@ -74,39 +77,42 @@ static void safeStrCpy(char *dest, const char *src, size_t maxLen) {
  * It's only read when NVS has no valid config (first boot or reset).
  */
 static bool loadConfigFromFile(miner_config_t *config) {
+#if !HAS_SD_CARD
+    // No SD card support on this build (headless)
+    Serial.println("[CONFIG] SD card not supported on this board");
+    return false;
+#else
     Serial.println("[CONFIG] Attempting to load config from SD card...");
-    
+
     // Initialize SD card
 #ifdef USE_SD_MMC
-    // ESP32-S3 FNK0104 uses SD_MMC 4-bit interface (Freenove driver approach)
+    // ESP32-S3 FNK0104 uses SD_MMC.
+    // NOTE: GPIO 48 (D2) is often the RGB LED on Freenove boards, causing 4-bit mode to fail.
+    // We default to 1-bit mode to avoid this conflict and ensure stability.
     Serial.println("[CONFIG] Setting up SD_MMC (Freenove FNK0104)...");
     Serial.print("[CONFIG] SD Pins - CLK:"); Serial.print(SD_MMC_CLK);
-        Serial.print(" CMD:"); Serial.print(SD_MMC_CMD);
-        Serial.print(" D0:"); Serial.print(SD_MMC_D0);
-        Serial.print(" D1:"); Serial.print(SD_MMC_D1);
-        Serial.print(" D2:"); Serial.print(SD_MMC_D2);
-        Serial.print(" D3:"); Serial.print(SD_MMC_D3);
-        Serial.print(" Freq:"); Serial.println(BOARD_MAX_SDMMC_FREQ);
-    SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
+    Serial.print(" CMD:"); Serial.print(SD_MMC_CMD);
+    Serial.print(" D0:"); Serial.print(SD_MMC_D0);
+    Serial.print(" Freq:"); Serial.println(BOARD_MAX_SDMMC_FREQ);
+
+    // Only set the essential pins for 1-bit mode to avoid claiming GPIO 48 (LED)
+    SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
+
+    // Give SD card time to power up (Freenove requires 3s, we use 2s as compromise)
+    Serial.println("[CONFIG] Waiting for SD card power-up...");
+    delay(2000);
     
-    // Give SD card time to power up
-    delay(100);
-    
-    // Try 4-bit mode first
-    Serial.println("[CONFIG] Trying SD_MMC 4-bit mode...");
-    if (!SD_MMC.begin("/sdcard", false, false, BOARD_MAX_SDMMC_FREQ, 5)) {
-        Serial.println("[CONFIG] 4-bit failed, trying 1-bit mode @ 4MHz...");
+    // Try 1-bit mode
+    Serial.println("[CONFIG] Trying SD_MMC 1-bit mode...");
+    if (!SD_MMC.begin("/sdcard", true, false, BOARD_MAX_SDMMC_FREQ, 5)) {
+        Serial.println("[CONFIG] 1-bit failed, trying 1-bit @ 1MHz...");
         SD_MMC.end();  // Clean up before retry
         delay(100);
-        if (!SD_MMC.begin("/sdcard", true, false, 4000, 5)) {
-            Serial.println("[CONFIG] 1-bit failed, trying 1-bit @ 1MHz...");
-            SD_MMC.end();
-            delay(100);
-            if (!SD_MMC.begin("/sdcard", true, false, 1000, 5)) {
-                Serial.println("[CONFIG] SD_MMC card not found or failed to mount");
-                Serial.println("[CONFIG] Check: card inserted? FAT32? contacts clean?");
-                return false;
-            }
+        if (!SD_MMC.begin("/sdcard", true, false, 1000, 5)) {
+            Serial.println("[CONFIG] SD_MMC card not found or failed to mount");
+            Serial.println("[CONFIG] Check: card inserted? FAT32? contacts clean?");
+            Serial.println("[CONFIG] TIP: Freenove pins can vary. If failing, try swapping CLK/CMD.");
+            return false;
         }
     }
     uint8_t cardType = SD_MMC.cardType();
@@ -201,6 +207,140 @@ static bool loadConfigFromFile(miner_config_t *config) {
 
     Serial.println("[CONFIG] Configuration loaded from SD card");
     return config->wallet[0] != '\0';  // Valid if wallet is set
+#endif  // HAS_SD_CARD
+}
+
+/**
+ * Initialize SD card for file operations
+ * Returns true if SD card is ready
+ */
+static bool initSD() {
+#if !HAS_SD_CARD
+    return false;
+#else
+    #ifdef USE_SD_MMC
+        // ESP32-S3 SD_MMC mode
+        SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
+        if (!SD_MMC.begin("/sdcard", true, false, BOARD_MAX_SDMMC_FREQ, 5)) {
+            return false;
+        }
+        if (SD_MMC.cardType() == 0) {
+            SD_MMC.end();
+            return false;
+        }
+    #else
+        // SPI SD mode
+        if (!SD.begin(SD_CS_PIN)) {
+            return false;
+        }
+    #endif
+    return true;
+#endif
+}
+
+/**
+ * Save mining stats to SD card as JSON backup
+ * Called alongside NVS save - survives firmware updates and factory resets
+ */
+static bool saveStatsToSD(const mining_persistence_t *stats) {
+#if !HAS_SD_CARD
+    return false;
+#else
+    if (!initSD()) {
+        // SD card not available - silently skip (not an error)
+        return false;
+    }
+
+    // Create JSON document
+    StaticJsonDocument<512> doc;
+    doc["lifetimeHashes"] = stats->lifetimeHashes;
+    doc["lifetimeShares"] = stats->lifetimeShares;
+    doc["lifetimeAccepted"] = stats->lifetimeAccepted;
+    doc["lifetimeRejected"] = stats->lifetimeRejected;
+    doc["lifetimeBlocks"] = stats->lifetimeBlocks;
+    doc["totalUptimeSeconds"] = stats->totalUptimeSeconds;
+    doc["bestDifficultyEver"] = stats->bestDifficultyEver;
+    doc["sessionCount"] = stats->sessionCount;
+    doc["magic"] = STATS_MAGIC;
+
+    // Write to file
+    File file = SD_FS.open(STATS_FILE_PATH, "w");
+    if (!file) {
+        Serial.println("[SD-STATS] Failed to open stats.json for writing");
+        SD_FS.end();
+        return false;
+    }
+
+    size_t written = serializeJson(doc, file);
+    file.close();
+    SD_FS.end();
+
+    if (written == 0) {
+        Serial.println("[SD-STATS] Failed to write stats.json");
+        return false;
+    }
+
+    Serial.printf("[SD-STATS] Backup saved: %llu hashes, %lu shares\n",
+                  stats->lifetimeHashes, stats->lifetimeShares);
+    return true;
+#endif
+}
+
+/**
+ * Load mining stats from SD card backup
+ * Used as fallback when NVS is empty (factory reset, firmware update)
+ */
+static bool loadStatsFromSD(mining_persistence_t *stats) {
+#if !HAS_SD_CARD
+    return false;
+#else
+    if (!initSD()) {
+        return false;
+    }
+
+    if (!SD_FS.exists(STATS_FILE_PATH)) {
+        SD_FS.end();
+        return false;
+    }
+
+    File file = SD_FS.open(STATS_FILE_PATH, "r");
+    if (!file) {
+        Serial.println("[SD-STATS] Failed to open stats.json");
+        SD_FS.end();
+        return false;
+    }
+
+    StaticJsonDocument<512> doc;
+    DeserializationError err = deserializeJson(doc, file);
+    file.close();
+    SD_FS.end();
+
+    if (err) {
+        Serial.printf("[SD-STATS] JSON parse error: %s\n", err.c_str());
+        return false;
+    }
+
+    // Verify magic value
+    if (!doc.containsKey("magic") || doc["magic"].as<uint32_t>() != STATS_MAGIC) {
+        Serial.println("[SD-STATS] Invalid magic value in stats.json");
+        return false;
+    }
+
+    // Load values
+    stats->lifetimeHashes = doc["lifetimeHashes"] | 0ULL;
+    stats->lifetimeShares = doc["lifetimeShares"] | 0UL;
+    stats->lifetimeAccepted = doc["lifetimeAccepted"] | 0UL;
+    stats->lifetimeRejected = doc["lifetimeRejected"] | 0UL;
+    stats->lifetimeBlocks = doc["lifetimeBlocks"] | 0UL;
+    stats->totalUptimeSeconds = doc["totalUptimeSeconds"] | 0UL;
+    stats->bestDifficultyEver = doc["bestDifficultyEver"] | 0.0;
+    stats->sessionCount = doc["sessionCount"] | 0UL;
+    stats->magic = STATS_MAGIC;
+
+    Serial.printf("[SD-STATS] Restored from backup: %llu hashes, %lu shares, %lu sessions\n",
+                  stats->lifetimeHashes, stats->lifetimeShares, stats->sessionCount);
+    return true;
+#endif
 }
 
 // ============================================================
@@ -232,7 +372,12 @@ void nvs_config_init() {
             loadedFromSd = true;
             // Save to NVS for persistence
             Serial.println("[NVS] Saving config to NVS for persistence...");
-            nvs_config_save(&s_config);
+            if (nvs_config_save(&s_config)) {
+                Serial.println("[NVS] Config saved to NVS successfully - SD card can now be removed");
+            } else {
+                Serial.println("[NVS] ERROR: Failed to save config to NVS!");
+                Serial.println("[NVS] Config will be lost on reboot without SD card!");
+            }
         }
     }
 
@@ -245,15 +390,29 @@ void nvs_config_init() {
 }
 
 bool nvs_config_load(miner_config_t *config) {
+    Serial.printf("[NVS] Loading config (struct size: %d bytes)\n", sizeof(miner_config_t));
+
     if (!s_prefs.begin(NVS_NAMESPACE, true)) {  // Read-only
-        Serial.println("[NVS] Failed to open namespace");
+        Serial.println("[NVS] Failed to open namespace (may be first boot)");
         return false;
     }
 
     size_t len = s_prefs.getBytesLength(NVS_KEY_CONFIG);
-    if (len != sizeof(miner_config_t)) {
-        Serial.printf("[NVS] Config size mismatch: %d vs %d\n", len, sizeof(miner_config_t));
+    if (len == 0) {
+        Serial.println("[NVS] No saved config found (first boot or erased)");
         s_prefs.end();
+        return false;
+    }
+
+    if (len != sizeof(miner_config_t)) {
+        Serial.printf("[NVS] Config size mismatch: stored=%d, expected=%d\n", len, sizeof(miner_config_t));
+        Serial.println("[NVS] Struct size changed - clearing old config");
+        // Clear the old incompatible config
+        s_prefs.end();
+        if (s_prefs.begin(NVS_NAMESPACE, false)) {
+            s_prefs.remove(NVS_KEY_CONFIG);
+            s_prefs.end();
+        }
         return false;
     }
 
@@ -261,29 +420,35 @@ bool nvs_config_load(miner_config_t *config) {
     s_prefs.end();
 
     if (read != sizeof(miner_config_t)) {
-        Serial.println("[NVS] Failed to read config");
+        Serial.printf("[NVS] Failed to read config: read=%d, expected=%d\n", read, sizeof(miner_config_t));
         return false;
     }
 
     // Verify checksum
     uint32_t expected = calculateChecksum(config);
     if (config->checksum != expected) {
-        Serial.printf("[NVS] Checksum mismatch: %08x vs %08x\n", config->checksum, expected);
+        Serial.printf("[NVS] Checksum mismatch: stored=%08x, calculated=%08x\n", config->checksum, expected);
         // CRITICAL: Reset config to prevent stale data from being used
         nvs_config_reset(config);
         return false;
     }
 
+    Serial.printf("[NVS] Config loaded: wallet=%s, pool=%s:%d\n",
+                  config->wallet[0] ? config->wallet : "(empty)",
+                  config->poolUrl,
+                  config->poolPort);
     return true;
 }
 
 bool nvs_config_save(const miner_config_t *config) {
+    Serial.printf("[NVS] Saving config (%d bytes)...\n", sizeof(miner_config_t));
+
     // Calculate checksum
     miner_config_t configCopy = *config;
     configCopy.checksum = calculateChecksum(&configCopy);
 
     if (!s_prefs.begin(NVS_NAMESPACE, false)) {  // Read-write
-        Serial.println("[NVS] Failed to open namespace for writing");
+        Serial.println("[NVS] ERROR: Failed to open namespace for writing");
         return false;
     }
 
@@ -291,14 +456,18 @@ bool nvs_config_save(const miner_config_t *config) {
     s_prefs.end();
 
     if (written != sizeof(miner_config_t)) {
-        Serial.println("[NVS] Failed to write config");
+        Serial.printf("[NVS] ERROR: Write failed - wrote %d of %d bytes\n", written, sizeof(miner_config_t));
         return false;
     }
 
     // Update global copy
     memcpy(&s_config, &configCopy, sizeof(miner_config_t));
 
-    Serial.println("[NVS] Configuration saved");
+    Serial.printf("[NVS] Config saved: wallet=%s, pool=%s:%d, checksum=%08x\n",
+                  configCopy.wallet[0] ? configCopy.wallet : "(empty)",
+                  configCopy.poolUrl,
+                  configCopy.poolPort,
+                  configCopy.checksum);
     return true;
 }
 
@@ -324,13 +493,17 @@ void nvs_config_reset(miner_config_t *config) {
     // Display defaults
     config->brightness = 100;
     config->screenTimeout = 0;  // Never timeout
-    config->rotation = 1;       // Landscape (default)
+    config->rotation = 0;       // Portrait USB Top (default)
     config->displayEnabled = true;
-    config->invertColors = false;  // Normal colors
+    config->invertColors = true;   // Dark theme (default)
 
     // Miner defaults
     safeStrCpy(config->workerName, "hybrid", sizeof(config->workerName));
     config->targetDifficulty = DESIRED_DIFFICULTY;
+
+    // Stats API defaults - HTTPS disabled by default for stability
+    config->statsProxyUrl[0] = '\0';  // No proxy by default
+    config->enableHttpsStats = false; // Direct HTTPS disabled (causes WDT crashes)
 
     config->checksum = 0;  // Will be calculated on save
 }
@@ -345,4 +518,170 @@ miner_config_t* nvs_config_get() {
 bool nvs_config_is_valid() {
     miner_config_t *config = nvs_config_get();
     return config->wallet[0] != '\0';
+}
+
+// ============================================================
+// Persistent Stats Implementation
+// ============================================================
+
+#define NVS_KEY_STATS "stats"
+
+static mining_persistence_t s_persistentStats = {0};
+static bool s_statsInitialized = false;
+
+static uint32_t calculateStatsChecksum(const mining_persistence_t *stats) {
+    const uint8_t *data = (const uint8_t *)stats;
+    uint32_t sum = STATS_MAGIC;
+
+    // Calculate checksum over all fields except the checksum itself
+    size_t len = sizeof(mining_persistence_t) - sizeof(uint32_t);
+    for (size_t i = 0; i < len; i++) {
+        sum = sum * 31 + data[i];
+    }
+
+    return sum;
+}
+
+bool nvs_stats_load(mining_persistence_t *stats) {
+    if (!s_prefs.begin(NVS_NAMESPACE, true)) {  // Read-only
+        Serial.println("[NVS-STATS] Failed to open namespace");
+        return false;
+    }
+
+    size_t len = s_prefs.getBytesLength(NVS_KEY_STATS);
+    if (len != sizeof(mining_persistence_t)) {
+        Serial.printf("[NVS-STATS] Stats size mismatch: %d vs %d\n", len, sizeof(mining_persistence_t));
+        s_prefs.end();
+        return false;
+    }
+
+    size_t read = s_prefs.getBytes(NVS_KEY_STATS, stats, sizeof(mining_persistence_t));
+    s_prefs.end();
+
+    if (read != sizeof(mining_persistence_t)) {
+        Serial.println("[NVS-STATS] Failed to read stats");
+        return false;
+    }
+
+    // Verify magic and checksum
+    if (stats->magic != STATS_MAGIC) {
+        Serial.printf("[NVS-STATS] Invalid magic: %08x (expected %08x)\n", stats->magic, STATS_MAGIC);
+        memset(stats, 0, sizeof(mining_persistence_t));
+        return false;
+    }
+
+    uint32_t expected = calculateStatsChecksum(stats);
+    if (stats->checksum != expected) {
+        Serial.printf("[NVS-STATS] Checksum mismatch: %08x vs %08x - clearing corrupted data\n", stats->checksum, expected);
+        // Clear corrupted stats from NVS
+        if (s_prefs.begin(NVS_NAMESPACE, false)) {
+            s_prefs.remove(NVS_KEY_STATS);
+            s_prefs.end();
+        }
+        memset(stats, 0, sizeof(mining_persistence_t));
+        return false;
+    }
+
+    Serial.printf("[NVS-STATS] Loaded: %llu hashes, %lu shares, %lu sessions\n",
+                  stats->lifetimeHashes, stats->lifetimeShares, stats->sessionCount);
+    return true;
+}
+
+bool nvs_stats_save(const mining_persistence_t *stats) {
+    // Create zero-initialized copy to avoid padding byte issues
+    mining_persistence_t statsCopy;
+    memset(&statsCopy, 0, sizeof(mining_persistence_t));
+
+    // Copy fields explicitly (avoids copying garbage in padding)
+    statsCopy.lifetimeHashes = stats->lifetimeHashes;
+    statsCopy.lifetimeShares = stats->lifetimeShares;
+    statsCopy.lifetimeAccepted = stats->lifetimeAccepted;
+    statsCopy.lifetimeRejected = stats->lifetimeRejected;
+    statsCopy.lifetimeBlocks = stats->lifetimeBlocks;
+    statsCopy.totalUptimeSeconds = stats->totalUptimeSeconds;
+    statsCopy.bestDifficultyEver = stats->bestDifficultyEver;
+    statsCopy.sessionCount = stats->sessionCount;
+    statsCopy.magic = STATS_MAGIC;
+    statsCopy.checksum = calculateStatsChecksum(&statsCopy);
+
+    if (!s_prefs.begin(NVS_NAMESPACE, false)) {  // Read-write
+        Serial.println("[NVS-STATS] Failed to open namespace for writing");
+        return false;
+    }
+
+    size_t written = s_prefs.putBytes(NVS_KEY_STATS, &statsCopy, sizeof(mining_persistence_t));
+    s_prefs.end();
+
+    if (written != sizeof(mining_persistence_t)) {
+        Serial.println("[NVS-STATS] Failed to write stats");
+        return false;
+    }
+
+    // Update global copy
+    memcpy(&s_persistentStats, &statsCopy, sizeof(mining_persistence_t));
+
+    Serial.printf("[NVS-STATS] Saved: %llu lifetime hashes, %lu shares\n",
+                  statsCopy.lifetimeHashes, statsCopy.lifetimeShares);
+
+    // Also backup to SD card (survives factory reset and firmware updates)
+    saveStatsToSD(&statsCopy);
+
+    return true;
+}
+
+mining_persistence_t* nvs_stats_get() {
+    if (!s_statsInitialized) {
+        bool loaded = false;
+
+        // 1. Try to load from NVS first (primary storage)
+        if (nvs_stats_load(&s_persistentStats)) {
+            loaded = true;
+        }
+
+        // 2. If NVS failed, try SD card backup (survives factory reset)
+        if (!loaded) {
+            Serial.println("[NVS-STATS] No NVS stats, checking SD card backup...");
+            if (loadStatsFromSD(&s_persistentStats)) {
+                loaded = true;
+                // Save recovered stats to NVS for faster access next boot
+                Serial.println("[NVS-STATS] Restoring stats from SD card to NVS...");
+                nvs_stats_save(&s_persistentStats);
+            }
+        }
+
+        // 3. If both failed, start fresh
+        if (!loaded) {
+            memset(&s_persistentStats, 0, sizeof(mining_persistence_t));
+            Serial.println("[NVS-STATS] No saved stats, starting fresh");
+        }
+
+        // Increment session count on each boot
+        s_persistentStats.sessionCount++;
+        s_statsInitialized = true;
+    }
+    return &s_persistentStats;
+}
+
+void nvs_stats_update(uint64_t currentHashes, uint32_t currentShares,
+                      uint32_t currentAccepted, uint32_t currentRejected,
+                      uint32_t currentBlocks, uint32_t sessionSeconds,
+                      double bestDiff) {
+    // Get current persistent stats
+    mining_persistence_t *stats = nvs_stats_get();
+
+    // Add current session values to lifetime totals
+    stats->lifetimeHashes += currentHashes;
+    stats->lifetimeShares += currentShares;
+    stats->lifetimeAccepted += currentAccepted;
+    stats->lifetimeRejected += currentRejected;
+    stats->lifetimeBlocks += currentBlocks;
+    stats->totalUptimeSeconds += sessionSeconds;
+
+    // Track best difficulty ever
+    if (bestDiff > stats->bestDifficultyEver) {
+        stats->bestDifficultyEver = bestDiff;
+    }
+
+    // Save to NVS
+    nvs_stats_save(stats);
 }
