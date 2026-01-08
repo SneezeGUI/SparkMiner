@@ -2,10 +2,15 @@
 .pio/
 .venv/
 
-# Build outputs (dev only, versioned releases are tracked)
+# Dirty/dev firmware builds (clean releases are tracked)
+firmware/*-dirty/
 firmware/dev/
 
-# Logs
+# Build output logs
+build_*.txt
+*.log
+
+# Logs directory
 logs/
 
 # Development notes
@@ -19,8 +24,7 @@ docs/
 # OS files
 .DS_Store
 Thumbs.db
+nul
 
 # Local config (sensitive)
 config.json
-# Development/test firmware builds
-dev-firmware/
