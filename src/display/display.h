@@ -157,7 +157,10 @@ void display_show_reset_complete();
 
 #else
 
-// Declarations for headless builds (implemented in display_manager.cpp)
+// Declarations for non-TFT builds
+// Implementations provided by:
+// - display_oled.cpp (when USE_OLED_DISPLAY=1)
+// - display_manager.cpp (headless/LED-only builds)
 void display_init(uint8_t rotation, uint8_t brightness);
 void display_update(const display_data_t *data);
 void display_set_brightness(uint8_t brightness);

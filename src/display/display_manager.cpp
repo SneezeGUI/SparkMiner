@@ -42,6 +42,11 @@ DisplayDriver* display_get_driver(void) {
 // The TFT driver registers itself and the functions in display.cpp
 // serve as the implementation. No routing needed for TFT-only builds.
 
+#elif USE_OLED_DISPLAY
+
+// These are implemented in display_oled.cpp (U8g2 OLED driver)
+// OLED driver provides its own display_* function implementations.
+
 #elif USE_LED_STATUS
 
 // LED-only builds: implement stubs that work with LED status

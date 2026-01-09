@@ -112,6 +112,24 @@ needs_boot_mode = true
 port_changes_on_reset = true
 group = "Headless (No Display)"
 
+[boards.esp32-c3-oled]
+name = "ESP32-C3 OLED"
+env = "esp32-c3-oled"
+chip = "esp32c3"
+description = "Single-core RISC-V with 128x64 SSD1306 OLED"
+needs_boot_mode = true
+port_changes_on_reset = true
+group = "OLED Display"
+
+[boards.esp32-s3-oled]
+name = "ESP32-S3 OLED"
+env = "esp32-s3-oled"
+chip = "esp32s3"
+description = "Dual-core with 128x64 SSD1306 OLED"
+needs_boot_mode = true
+port_changes_on_reset = true
+group = "OLED Display"
+
 # ============================================================
 # Release Settings
 # ============================================================

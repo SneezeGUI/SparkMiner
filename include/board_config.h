@@ -298,6 +298,57 @@
     // SHA Implementation: Uses miner_sha256.cpp (BitsyMiner software SHA)
 
 // ============================================================
+// ESP32-C3 with OLED Display (0.96" 128x64 SSD1306)
+// Compact miner with small monochrome display
+// ============================================================
+#elif defined(ESP32_C3_OLED)
+    #define BOARD_NAME "ESP32-C3-OLED"
+
+    // Use OLED display (not TFT)
+    #define USE_DISPLAY 0
+    #define USE_OLED_DISPLAY 1
+
+    // OLED configuration (128x64 SSD1306 I2C)
+    #define OLED_WIDTH 128
+    #define OLED_HEIGHT 64
+    #define OLED_SDA_PIN 5
+    #define OLED_SCL_PIN 6
+    #define OLED_I2C_ADDR 0x3C
+
+    #ifndef BUTTON_PIN
+        #define BUTTON_PIN 9
+    #endif
+    #define BUTTON_ACTIVE_LOW 1
+
+    // Single-core RISC-V - software SHA only
+    // SHA Implementation: Uses miner_sha256.cpp (BitsyMiner software SHA)
+
+// ============================================================
+// ESP32-S3 with OLED Display (0.96" 128x64 SSD1306)
+// Higher performance with small display
+// ============================================================
+#elif defined(ESP32_S3_OLED)
+    #define BOARD_NAME "ESP32-S3-OLED"
+
+    // Use OLED display (not TFT)
+    #define USE_DISPLAY 0
+    #define USE_OLED_DISPLAY 1
+
+    // OLED configuration (128x64 SSD1306 I2C)
+    #define OLED_WIDTH 128
+    #define OLED_HEIGHT 64
+    #define OLED_SDA_PIN 5
+    #define OLED_SCL_PIN 6
+    #define OLED_I2C_ADDR 0x3C
+
+    #ifndef BUTTON_PIN
+        #define BUTTON_PIN 0
+    #endif
+    #define BUTTON_ACTIVE_LOW 1
+
+    // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
+
+// ============================================================
 // Default - Generic ESP32
 // ============================================================
 #else
