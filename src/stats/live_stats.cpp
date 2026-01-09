@@ -53,8 +53,11 @@ static uint32_t s_errorCount = 0;
 // ============================================================
 
 /**
- * Parse proxy URL: http://[user:pass@]host:port
- * Returns true if valid proxy URL
+ * Parse proxy configuration in multiple formats:
+ *   1. URL format: http://[user:pass@]host:port
+ *   2. Simple format: host:port:user:pass
+ *   3. Simple format without auth: host:port
+ * Returns true if valid proxy config
  */
 static bool parseProxyUrl(const char *url) {
     s_proxyHost[0] = '\0';
@@ -62,50 +65,93 @@ static bool parseProxyUrl(const char *url) {
     s_proxyAuth[0] = '\0';
     s_proxyConfigured = false;
 
-    if (!url || strlen(url) < 10) return false;
+    if (!url || strlen(url) < 5) return false;
 
-    // Must start with http://
-    if (strncmp(url, "http://", 7) != 0) {
-        Serial.println("[STATS] Proxy URL must start with http://");
-        return false;
+    // Check if it's URL format (starts with http://)
+    if (strncmp(url, "http://", 7) == 0) {
+        // URL format: http://[user:pass@]host:port
+        const char *hostStart = url + 7;
+        const char *atSign = strchr(hostStart, '@');
+
+        if (atSign) {
+            // Has authentication: user:pass@host:port
+            char authPart[96];
+            size_t authLen = atSign - hostStart;
+            if (authLen >= sizeof(authPart)) authLen = sizeof(authPart) - 1;
+            strncpy(authPart, hostStart, authLen);
+            authPart[authLen] = '\0';
+
+            // Base64 encode for Proxy-Authorization header
+            String encoded = base64::encode((uint8_t*)authPart, strlen(authPart));
+            strncpy(s_proxyAuth, encoded.c_str(), sizeof(s_proxyAuth) - 1);
+            s_proxyAuth[sizeof(s_proxyAuth) - 1] = '\0';
+
+            hostStart = atSign + 1;
+        }
+
+        // Find port separator
+        const char *colonPort = strchr(hostStart, ':');
+        if (!colonPort) {
+            Serial.println("[STATS] Proxy URL must include port");
+            return false;
+        }
+
+        // Extract host
+        size_t hostLen = colonPort - hostStart;
+        if (hostLen >= sizeof(s_proxyHost)) hostLen = sizeof(s_proxyHost) - 1;
+        strncpy(s_proxyHost, hostStart, hostLen);
+        s_proxyHost[hostLen] = '\0';
+
+        // Extract port (stop at any trailing characters)
+        s_proxyPort = atoi(colonPort + 1);
+    } else {
+        // Simple format: host:port[:user:pass]
+        // Count colons to determine format
+        int colonCount = 0;
+        const char *colons[4] = {NULL};
+        const char *p = url;
+        while (*p && colonCount < 4) {
+            if (*p == ':') {
+                colons[colonCount++] = p;
+            }
+            p++;
+        }
+
+        if (colonCount < 1) {
+            Serial.println("[STATS] Proxy must include port (host:port)");
+            return false;
+        }
+
+        // Extract host (everything before first colon)
+        size_t hostLen = colons[0] - url;
+        if (hostLen >= sizeof(s_proxyHost)) hostLen = sizeof(s_proxyHost) - 1;
+        strncpy(s_proxyHost, url, hostLen);
+        s_proxyHost[hostLen] = '\0';
+
+        // Extract port
+        s_proxyPort = atoi(colons[0] + 1);
+
+        // Check for auth (host:port:user:pass format)
+        if (colonCount >= 3) {
+            // Extract user (between 2nd and 3rd colon)
+            char user[64] = {0};
+            size_t userLen = colons[2] - (colons[1] + 1);
+            if (userLen >= sizeof(user)) userLen = sizeof(user) - 1;
+            strncpy(user, colons[1] + 1, userLen);
+            user[userLen] = '\0';
+
+            // Extract pass (after 3rd colon)
+            const char *pass = colons[2] + 1;
+
+            // Build auth string "user:pass" and base64 encode
+            char authPart[96];
+            snprintf(authPart, sizeof(authPart), "%s:%s", user, pass);
+            String encoded = base64::encode((uint8_t*)authPart, strlen(authPart));
+            strncpy(s_proxyAuth, encoded.c_str(), sizeof(s_proxyAuth) - 1);
+            s_proxyAuth[sizeof(s_proxyAuth) - 1] = '\0';
+        }
     }
 
-    const char *hostStart = url + 7;  // Skip "http://"
-    const char *atSign = strchr(hostStart, '@');
-    const char *colonPort = NULL;
-    const char *hostEnd = NULL;
-
-    if (atSign) {
-        // Has authentication: user:pass@host:port
-        char authPart[96];
-        size_t authLen = atSign - hostStart;
-        if (authLen >= sizeof(authPart)) authLen = sizeof(authPart) - 1;
-        strncpy(authPart, hostStart, authLen);
-        authPart[authLen] = '\0';
-
-        // Base64 encode for Proxy-Authorization header
-        String encoded = base64::encode((uint8_t*)authPart, strlen(authPart));
-        strncpy(s_proxyAuth, encoded.c_str(), sizeof(s_proxyAuth) - 1);
-        s_proxyAuth[sizeof(s_proxyAuth) - 1] = '\0';
-
-        hostStart = atSign + 1;
-    }
-
-    // Find port separator
-    colonPort = strchr(hostStart, ':');
-    if (!colonPort) {
-        Serial.println("[STATS] Proxy URL must include port (e.g., :8080)");
-        return false;
-    }
-
-    // Extract host
-    size_t hostLen = colonPort - hostStart;
-    if (hostLen >= sizeof(s_proxyHost)) hostLen = sizeof(s_proxyHost) - 1;
-    strncpy(s_proxyHost, hostStart, hostLen);
-    s_proxyHost[hostLen] = '\0';
-
-    // Extract port
-    s_proxyPort = atoi(colonPort + 1);
     if (s_proxyPort == 0) {
         Serial.println("[STATS] Invalid proxy port");
         return false;
@@ -135,47 +181,72 @@ static void logError(const char *context, int code) {
 }
 
 /**
- * Fetch URL via HTTP proxy (path-forwarding mode)
- * Request format: GET /https://target.com/path HTTP/1.1
- * Compatible with Cloudflare Workers and similar edge proxies
+ * Extract hostname from URL (e.g., "https://api.coingecko.com/path" -> "api.coingecko.com")
  */
-static bool fetchViaProxy(const char *targetUrl, JsonDocument &doc) {
-    if (!s_proxyConfigured || !s_proxyHealthy) return false;
+static String extractHostFromUrl(const char *url) {
+    const char *start = strstr(url, "://");
+    if (!start) return "";
+    start += 3;  // Skip "://"
 
+    const char *end = strchr(start, '/');
+    if (!end) end = start + strlen(start);
+
+    // Check for port in host
+    const char *colon = strchr(start, ':');
+    if (colon && colon < end) end = colon;
+
+    return String(start).substring(0, end - start);
+}
+
+/**
+ * Extract path from URL (e.g., "https://api.coingecko.com/api/v3/..." -> "/api/v3/...")
+ */
+static String extractPathFromUrl(const char *url) {
+    const char *start = strstr(url, "://");
+    if (!start) return "/";
+    start += 3;  // Skip "://"
+
+    const char *path = strchr(start, '/');
+    if (!path) return "/";
+
+    return String(path);
+}
+
+// Proxy method preference: 0=auto, 1=GET (SSL bump), 2=CONNECT (tunnel)
+static uint8_t s_proxyMethod = 0;
+
+/**
+ * Fetch URL via HTTP proxy using GET method (SSL bumping mode)
+ * Request format: GET https://target.com/path HTTP/1.1
+ * Requires proxy with SSL bumping (decrypts/re-encrypts HTTPS)
+ */
+static bool fetchViaProxyGet(const char *targetUrl, JsonDocument &doc) {
     WiFiClient client;
     client.setTimeout(8000);
 
     if (!client.connect(s_proxyHost, s_proxyPort)) {
-        logError("Proxy connect", -1);
-        s_proxyFailCount++;
         return false;
     }
 
-    // Build HTTP request using path-forwarding format
-    // GET /https://api.coingecko.com/api/v3/... HTTP/1.1
-    // This is compatible with Cloudflare Workers
-    String request = "GET /";
-    request += targetUrl;  // Full URL becomes path
+    String targetHost = extractHostFromUrl(targetUrl);
+
+    // Build HTTP request - full URL in request line for SSL bumping proxy
+    String request = "GET ";
+    request += targetUrl;
     request += " HTTP/1.1\r\n";
     request += "Host: ";
-    request += s_proxyHost;
-    if (s_proxyPort != 80) {
-        request += ":";
-        request += String(s_proxyPort);
-    }
+    request += targetHost;
     request += "\r\n";
 
-    // Add proxy authentication if configured (as Authorization header)
     if (s_proxyAuth[0]) {
-        request += "Authorization: Basic ";
+        request += "Proxy-Authorization: Basic ";
         request += s_proxyAuth;
         request += "\r\n";
     }
 
     request += "User-Agent: SparkMiner/1.0 ESP32\r\n";
     request += "Accept: application/json\r\n";
-    request += "Connection: close\r\n";
-    request += "\r\n";
+    request += "Connection: close\r\n\r\n";
 
     client.print(request);
 
@@ -186,14 +257,14 @@ static bool fetchViaProxy(const char *targetUrl, JsonDocument &doc) {
     }
 
     if (!client.available()) {
-        logError("Proxy timeout", -2);
-        s_proxyFailCount++;
         client.stop();
         return false;
     }
 
     // Read status line
     String statusLine = client.readStringUntil('\n');
+    statusLine.trim();
+
     int statusCode = 0;
     if (statusLine.startsWith("HTTP/")) {
         int spaceIdx = statusLine.indexOf(' ');
@@ -203,37 +274,135 @@ static bool fetchViaProxy(const char *targetUrl, JsonDocument &doc) {
     }
 
     if (statusCode != 200) {
-        logError("Proxy response", statusCode);
-        s_proxyFailCount++;
+        Serial.printf("[STATS] Proxy error: %d\n", statusCode);
         client.stop();
         return false;
     }
 
-    // Skip headers
-    while (client.connected() && client.available()) {
+    // Skip headers, look for Content-Length and Transfer-Encoding
+    int contentLength = -1;
+    bool chunked = false;
+    while (client.connected() || client.available()) {
+        if (!client.available()) {
+            vTaskDelay(10 / portTICK_PERIOD_MS);
+            continue;
+        }
         String line = client.readStringUntil('\n');
-        if (line == "\r" || line.length() == 0) break;
+        line.trim();
+        if (line.startsWith("Content-Length:")) {
+            contentLength = line.substring(15).toInt();
+        }
+        if (line.indexOf("chunked") >= 0) {
+            chunked = true;
+        }
+        if (line.length() == 0) break;
     }
 
-    // Read body
-    String body = client.readString();
+    // Read body with size limit to prevent OOM
+    const int MAX_BODY = 4096;
+    String body;
+    body.reserve(MAX_BODY);
+
+    // Read body - continue while connected OR data available in buffer
+    uint32_t readTimeout = millis() + 5000;
+    while ((client.connected() || client.available()) && (int)body.length() < MAX_BODY && millis() < readTimeout) {
+        if (client.available()) {
+            char c = client.read();
+            body += c;
+        } else {
+            vTaskDelay(1);
+        }
+    }
     client.stop();
 
-    // Parse JSON
-    DeserializationError err = deserializeJson(doc, body);
-    if (err) {
-        logError("Proxy JSON", -3);
-        s_proxyFailCount++;
+    // Handle chunked transfer encoding
+    if (chunked && body.length() > 0) {
+        String decoded;
+        decoded.reserve(body.length());
+        int pos = 0;
+        while (pos < (int)body.length()) {
+            // Read chunk size (hex)
+            int lineEnd = body.indexOf('\n', pos);
+            if (lineEnd < 0) break;
+            String sizeLine = body.substring(pos, lineEnd);
+            sizeLine.trim();
+            int chunkSize = strtol(sizeLine.c_str(), NULL, 16);
+            if (chunkSize == 0) break;  // End of chunks
+            pos = lineEnd + 1;
+            // Read chunk data
+            if (pos + chunkSize <= (int)body.length()) {
+                decoded += body.substring(pos, pos + chunkSize);
+            }
+            pos += chunkSize + 2;  // Skip data + \r\n
+        }
+        body = decoded;
+    }
+
+    if (body.length() == 0) {
+        Serial.println("[STATS] Proxy: empty response");
         return false;
     }
 
-    // Success - reset fail count
-    s_proxyFailCount = 0;
-    if (!s_proxyHealthy) {
-        s_proxyHealthy = true;
-        Serial.println("[STATS] Proxy recovered, re-enabling HTTPS stats");
+    DeserializationError err = deserializeJson(doc, body);
+    if (err) {
+        logError("Proxy JSON", err.code());
+        return false;
     }
     return true;
+}
+
+/**
+ * Fetch URL via HTTP proxy using CONNECT method (HTTPS tunneling)
+ *
+ * NOTE: ESP32 Arduino WiFiClientSecure doesn't support upgrading existing
+ * TCP connections to TLS. This would require direct mbedtls API usage.
+ * For now, use a proxy with SSL bumping (GET method) instead.
+ *
+ * If CONNECT tunnel is needed, implement via mbedtls_ssl_set_bio() with
+ * the existing socket fd from client.fd().
+ */
+static bool fetchViaProxyConnect(const char *targetUrl, JsonDocument &doc) {
+    // CONNECT tunneling not yet implemented for ESP32
+    // Use proxy with SSL bumping and GET method instead
+    (void)targetUrl;
+    (void)doc;
+    return false;
+}
+
+/**
+ * Fetch URL via HTTP proxy - tries both methods with auto-detection
+ * 1. GET method (SSL bumping) - simpler, lower memory
+ * 2. CONNECT method (tunneling) - works without SSL bumping
+ */
+static bool fetchViaProxy(const char *targetUrl, JsonDocument &doc) {
+    if (!s_proxyConfigured || !s_proxyHealthy) return false;
+
+    bool success = false;
+
+    // Try preferred method first, or auto-detect
+    if (s_proxyMethod == 0 || s_proxyMethod == 1) {
+        // Try GET method (SSL bumping)
+        success = fetchViaProxyGet(targetUrl, doc);
+        if (success) {
+            if (s_proxyMethod == 0) s_proxyMethod = 1;
+            s_proxyFailCount = 0;
+            return true;
+        }
+    }
+
+    if (s_proxyMethod == 0 || s_proxyMethod == 2) {
+        // Try CONNECT method (tunneling)
+        success = fetchViaProxyConnect(targetUrl, doc);
+        if (success) {
+            if (s_proxyMethod == 0) s_proxyMethod = 2;
+            s_proxyFailCount = 0;
+            return true;
+        }
+    }
+
+    // Both methods failed
+    s_proxyFailCount++;
+    return false;
 }
 
 /**
@@ -367,6 +536,7 @@ static void checkProxyHealth() {
 static void updatePrice() {
     // Only fetch if HTTPS is available (proxy or direct)
     if (!s_proxyConfigured && !s_httpsEnabled) return;
+    if (s_proxyConfigured && !s_proxyHealthy) return;
 
     s_jsonDoc.clear();
     if (fetchJson(API_BTC_PRICE, s_jsonDoc)) {
@@ -376,6 +546,7 @@ static void updatePrice() {
             s_stats.priceTimestamp = millis();
             s_stats.priceValid = true;
             xSemaphoreGive(s_statsMutex);
+            Serial.printf("[STATS] BTC price updated: $%.0f\n", s_stats.btcPriceUsd);
         }
     }
 }
@@ -425,7 +596,11 @@ static void updateFees() {
 static void updatePoolStats() {
     // Only fetch if HTTPS is available (proxy or direct)
     if (!s_proxyConfigured && !s_httpsEnabled) return;
-    if (strlen(s_wallet) == 0) return;
+    if (s_proxyConfigured && !s_proxyHealthy) return;
+    if (strlen(s_wallet) == 0) {
+        Serial.println("[STATS] Pool stats skipped: no wallet configured");
+        return;
+    }
 
     char url[256];
     snprintf(url, sizeof(url), "%s%s", API_PUBLIC_POOL, s_wallet);
@@ -446,6 +621,7 @@ static void updatePoolStats() {
         }
         s_stats.poolValid = true;
         xSemaphoreGive(s_statsMutex);
+        Serial.printf("[STATS] Pool stats updated: %d workers\n", s_stats.poolWorkersCount);
     }
 }
 
@@ -508,6 +684,15 @@ void live_stats_force_update() {
 void live_stats_task(void *param) {
     // Initial delay to let WiFi settle
     vTaskDelay(5000 / portTICK_PERIOD_MS);
+
+    // Force immediate first update by backdating timers
+    uint32_t bootTime = millis();
+    s_lastBlockUpdate = bootTime - UPDATE_BLOCK_MS - 1000;
+    s_lastFeesUpdate = bootTime - UPDATE_FEES_MS - 2000;
+    s_lastPriceUpdate = bootTime - UPDATE_PRICE_MS - 3000;
+    s_lastPoolUpdate = bootTime - UPDATE_POOL_MS - 4000;
+
+    Serial.println("[STATS] Task started");
 
     while (true) {
         if (WiFi.status() == WL_CONNECTED) {
