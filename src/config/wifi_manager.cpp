@@ -38,6 +38,7 @@ static char s_invertHtml[512];
 static char s_brightnessHtml[512];
 static char s_difficultyHtml[768];
 static WiFiManagerParameter* s_paramRotation = NULL;
+static WiFiManagerParameter* s_paramTimezone = NULL;
 static WiFiManagerParameter* s_paramInvert = NULL;
 
 // Stats API parameters
@@ -99,6 +100,9 @@ static void saveParamsCallback() {
     }
     if (s_paramRotation) {
         config->rotation = atoi(s_paramRotation->getValue());
+    }
+    if (s_paramTimezone) {
+        config->timezoneOffset = atoi(s_paramTimezone->getValue());
     }
     if (s_paramInvert) {
         config->invertColors = (atoi(s_paramInvert->getValue()) == 1);
@@ -213,9 +217,9 @@ void wifi_manager_init() {
     // TFT rotation: 0,2=Portrait, 1,3=Landscape
     // USB position based on CYD board physical layout
     const char* rotLabels[] = {
-        "Portrait - USB Top (Default)",
-        "Landscape - USB Right",
         "Portrait - USB Bottom",
+        "Landscape - USB Right",
+        "Portrait - USB Top",
         "Landscape - USB Left"
     };
     
@@ -232,6 +236,22 @@ void wifi_manager_init() {
     }
     strcat(s_rotationHtml, "</select>");
     s_paramRotation = new WiFiManagerParameter("rotation", "Screen Rotation", "0", 2, s_rotationHtml);
+
+    // Timezone dropdown
+    // Common timezones from UTC-12 to UTC+14
+    static char s_timezoneHtml[2048];
+    strcpy(s_timezoneHtml, "<br><select name='tz'>");
+    for (int i = -12; i <= 14; i++) {
+        char opt[128];
+        sprintf(opt, "<option value='%d'%s>UTC%s%d</option>",
+            i,
+            (config->timezoneOffset == i) ? " selected" : "",
+            (i >= 0) ? "+" : "",
+            i);
+        strcat(s_timezoneHtml, opt);
+    }
+    strcat(s_timezoneHtml, "</select>");
+    s_paramTimezone = new WiFiManagerParameter("tz", "Timezone Offset", "0", 4, s_timezoneHtml);
 
     // Custom HTML for Color Theme
     // CYD panel is inverted by default, so invertDisplay(true) = dark theme
@@ -282,8 +302,11 @@ void wifi_manager_init() {
         "button:hover{background:#ff8c00;}"
         "div{padding:5px 0;}"
         // Hide redundant text inputs for dropdown fields (dropdowns handle these)
-        "input[name='bright'],input[name='diff'],input[name='rotation'],input[name='invert'],input[name='https_stats']{display:none;}"
-        "</style>";
+        "input[name='bright'],input[name='diff'],input[name='rotation'],input[name='invert'],input[name='https_stats'],input[name='tz']{display:none;}"
+        "</style>"
+        "<script>"
+        "function c(l){document.getElementById('s').value=l.innerText||l.textContent;document.getElementById('p').focus();}"
+        "</script>";
     s_wm.setCustomHeadElement(customCSS);
 
     // Add Parameters
@@ -303,6 +326,7 @@ void wifi_manager_init() {
     s_wm.addParameter(s_paramBrightness);
     s_wm.addParameter(s_paramDifficulty);
     s_wm.addParameter(s_paramRotation);
+    s_wm.addParameter(s_paramTimezone);
     s_wm.addParameter(s_paramInvert);
 
     s_wm.addParameter(s_paramStatsHeader);
@@ -349,6 +373,11 @@ void wifi_manager_blocking() {
         config->ssid[MAX_SSID_LENGTH] = '\0';
         strncpy(config->wifiPassword, WiFi.psk().c_str(), MAX_PASSWORD_LEN);
         config->wifiPassword[MAX_PASSWORD_LEN] = '\0';
+
+        // Configure NTP
+        long gmtOffset = config->timezoneOffset * 3600L;
+        configTime(gmtOffset, 0, "pool.ntp.org", "time.nist.gov");
+        Serial.printf("[NTP] Time sync started (UTC%+d)\n", config->timezoneOffset);
 
         Serial.printf("[WIFI] Saving credentials for SSID: %s\n", config->ssid);
         if (nvs_config_save(config)) {
@@ -406,6 +435,12 @@ void wifi_manager_start() {
         if (WiFi.status() == WL_CONNECTED) {
             Serial.printf("[WIFI] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
             strncpy(s_ipAddress, WiFi.localIP().toString().c_str(), sizeof(s_ipAddress));
+            
+            // Configure NTP
+            long gmtOffset = config->timezoneOffset * 3600L;
+            configTime(gmtOffset, 0, "pool.ntp.org", "time.nist.gov");
+            Serial.printf("[NTP] Time sync started (UTC%+d)\n", config->timezoneOffset);
+            
             return;
         }
     }

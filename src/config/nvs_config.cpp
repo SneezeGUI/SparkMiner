@@ -201,6 +201,9 @@ static bool loadConfigFromFile(miner_config_t *config) {
     if (doc.containsKey("rotation")) {
         config->rotation = doc["rotation"];
     }
+    if (doc.containsKey("timezone_offset")) {
+        config->timezoneOffset = doc["timezone_offset"];
+    }
 
     // Stats API settings (optional)
     if (doc.containsKey("stats_proxy_url")) {
@@ -504,6 +507,7 @@ void nvs_config_reset(miner_config_t *config) {
     config->rotation = 0;       // Portrait USB Top (default)
     config->displayEnabled = true;
     config->invertColors = true;   // Dark theme (default) - CYD panel is inverted, so invertDisplay(true) = dark
+    config->timezoneOffset = 0;    // UTC+0 default
 
     // Miner defaults
     safeStrCpy(config->workerName, "SparkMiner", sizeof(config->workerName));

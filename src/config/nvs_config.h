@@ -38,6 +38,7 @@ typedef struct {
     uint8_t rotation;       // Screen rotation (0-3)
     bool displayEnabled;
     bool invertColors;      // Invert display colors
+    int8_t timezoneOffset;  // UTC offset in hours (-12 to +14)
 
     // Miner settings
     char workerName[32];
