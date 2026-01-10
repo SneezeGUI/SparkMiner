@@ -631,34 +631,90 @@ static void updateNetworkHashrate() {
     if (!s_proxyConfigured && !s_httpsEnabled) return;
     if (s_proxyConfigured && !s_proxyHealthy) return;
 
+    // The hashrate API returns ~400KB response with historical data.
+    // We use a filter to extract only the fields we need, ignoring the "hashrates" array.
+    StaticJsonDocument<128> filter;
+    filter["currentHashrate"] = true;
+    filter["currentDifficulty"] = true;
+
+    WiFiClient client;
+    client.setTimeout(8000);
+
+    if (!client.connect(s_proxyHost, s_proxyPort)) {
+        return;
+    }
+
+    String targetHost = extractHostFromUrl(API_HASHRATE);
+
+    // Build request
+    String request = "GET ";
+    request += API_HASHRATE;
+    request += " HTTP/1.1\r\nHost: ";
+    request += targetHost;
+    request += "\r\n";
+    if (s_proxyAuth[0]) {
+        request += "Proxy-Authorization: Basic ";
+        request += s_proxyAuth;
+        request += "\r\n";
+    }
+    request += "Connection: close\r\n\r\n";
+    client.print(request);
+
+    // Wait for response
+    uint32_t timeout = millis() + 10000;
+    while (client.connected() && !client.available() && millis() < timeout) {
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+
+    if (!client.available()) {
+        client.stop();
+        return;
+    }
+
+    // Skip HTTP headers
+    while (client.connected() || client.available()) {
+        String line = client.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) break;
+    }
+
+    // Parse JSON with filter (ignores hashrates array, saves memory)
     s_jsonDoc.clear();
-    if (fetchJson(API_HASHRATE, s_jsonDoc)) {
-        xSemaphoreTake(s_statsMutex, portMAX_DELAY);
-        
-        // Parse hashrate (hashes/s)
-        double hashrate = s_jsonDoc["currentHashrate"];
+    DeserializationError err = deserializeJson(s_jsonDoc, client, DeserializationOption::Filter(filter));
+    client.stop();
+
+    if (err) {
+        Serial.printf("[STATS] Hashrate parse error: %s\n", err.c_str());
+        return;
+    }
+
+    xSemaphoreTake(s_statsMutex, portMAX_DELAY);
+
+    // Parse hashrate (hashes/s)
+    double hashrate = s_jsonDoc["currentHashrate"] | 0.0;
+    if (hashrate > 0) {
         s_stats.networkHashrateRaw = hashrate;
-        
+
         // Format hashrate string
         if (hashrate > 1e18) {
             snprintf(s_stats.networkHashrate, sizeof(s_stats.networkHashrate), "%.2f EH/s", hashrate / 1e18);
         } else if (hashrate > 1e15) {
-             snprintf(s_stats.networkHashrate, sizeof(s_stats.networkHashrate), "%.2f PH/s", hashrate / 1e15);
+            snprintf(s_stats.networkHashrate, sizeof(s_stats.networkHashrate), "%.2f PH/s", hashrate / 1e15);
         } else {
-             snprintf(s_stats.networkHashrate, sizeof(s_stats.networkHashrate), "%.2f TH/s", hashrate / 1e12);
+            snprintf(s_stats.networkHashrate, sizeof(s_stats.networkHashrate), "%.2f TH/s", hashrate / 1e12);
         }
-        
-        // Try to get difficulty if available in response (mempool.space often includes it)
-        if (s_jsonDoc.containsKey("currentDifficulty")) {
-            double diff = s_jsonDoc["currentDifficulty"];
-            s_stats.difficultyRaw = diff;
-            snprintf(s_stats.networkDifficulty, sizeof(s_stats.networkDifficulty), "%.2f T", diff / 1e12);
-        }
-
-        s_stats.networkValid = true;
-        xSemaphoreGive(s_statsMutex);
-        Serial.printf("[STATS] Network hashrate updated: %s\n", s_stats.networkHashrate);
     }
+
+    // Get difficulty if available
+    double diff = s_jsonDoc["currentDifficulty"] | 0.0;
+    if (diff > 0) {
+        s_stats.difficultyRaw = diff;
+        snprintf(s_stats.networkDifficulty, sizeof(s_stats.networkDifficulty), "%.2f T", diff / 1e12);
+    }
+
+    s_stats.networkValid = true;
+    xSemaphoreGive(s_statsMutex);
+    Serial.printf("[STATS] Network: %s, Diff: %s\n", s_stats.networkHashrate, s_stats.networkDifficulty);
 }
 
 static void updateNetworkDifficulty() {
