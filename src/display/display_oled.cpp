@@ -350,6 +350,19 @@ uint8_t oled_display_flip_rotation() {
     return s_rotation;
 }
 
+void oled_display_set_rotation(uint8_t rotation) {
+    // OLED only supports 0 and 2 (180 degree flip)
+    s_rotation = (rotation >= 2) ? 2 : 0;
+
+    if (s_rotation == 2) {
+        s_u8g2.setDisplayRotation(U8G2_R2);
+    } else {
+        s_u8g2.setDisplayRotation(U8G2_R0);
+    }
+
+    s_needsRedraw = true;
+}
+
 void oled_display_set_inverted(bool inverted) {
     s_inverted = inverted;
     // U8g2 doesn't have direct invert, we'd need to redraw with XOR
@@ -442,6 +455,10 @@ void display_redraw() {
 
 uint8_t display_flip_rotation() {
     return oled_display_flip_rotation();
+}
+
+void display_set_rotation(uint8_t rotation) {
+    oled_display_set_rotation(rotation);
 }
 
 uint16_t display_get_width() {

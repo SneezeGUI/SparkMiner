@@ -109,6 +109,12 @@ void display_redraw();
 uint8_t display_flip_rotation();
 
 /**
+ * Set screen rotation to specific value
+ * @param rotation Rotation value (0-3)
+ */
+void display_set_rotation(uint8_t rotation);
+
+/**
  * Get current display width
  */
 uint16_t display_get_width();
@@ -169,6 +175,7 @@ uint8_t display_get_screen();
 void display_next_screen();
 void display_redraw();
 uint8_t display_flip_rotation();
+void display_set_rotation(uint8_t rotation);
 uint16_t display_get_width();
 uint16_t display_get_height();
 bool display_is_portrait();

@@ -84,6 +84,10 @@ uint8_t display_flip_rotation() {
     return 0;
 }
 
+void display_set_rotation(uint8_t rotation) {
+    // No-op for LED-only display
+}
+
 uint16_t display_get_width() {
     return 0;
 }
@@ -138,6 +142,7 @@ uint8_t display_get_screen() { return 0; }
 void display_next_screen() {}
 void display_redraw() {}
 uint8_t display_flip_rotation() { return 0; }
+void display_set_rotation(uint8_t rotation) {}
 uint16_t display_get_width() { return 0; }
 uint16_t display_get_height() { return 0; }
 bool display_is_portrait() { return false; }

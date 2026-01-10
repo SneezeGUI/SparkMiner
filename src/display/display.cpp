@@ -881,6 +881,15 @@ uint8_t display_flip_rotation() {
     return s_rotation;
 }
 
+void display_set_rotation(uint8_t rotation) {
+    if (rotation > 3) rotation = 0;
+    s_rotation = rotation;
+    s_tft.setRotation(s_rotation);
+    s_tft.fillScreen(COLOR_BG);
+    s_needsRedraw = true;
+    Serial.printf("[DISPLAY] Rotation set to %d\n", s_rotation);
+}
+
 void display_set_inverted(bool inverted) {
     s_tft.invertDisplay(inverted);
     Serial.printf("[DISPLAY] Color inversion %s\n", inverted ? "enabled" : "disabled");

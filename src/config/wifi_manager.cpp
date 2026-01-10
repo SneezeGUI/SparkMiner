@@ -91,12 +91,16 @@ static void saveParamsCallback() {
         strncpy(config->backupPoolPassword, s_paramBackupPoolPassword->getValue(), MAX_PASSWORD_LEN);
     }
 
-    // Display & Miner
+    // Display & Miner settings
     if (s_paramBrightness) {
         int b = atoi(s_paramBrightness->getValue());
         if (b < 0) b = 0;
         if (b > 100) b = 100;
         config->brightness = b;
+    }
+    if (s_paramDifficulty) {
+        config->targetDifficulty = atof(s_paramDifficulty->getValue());
+        if (config->targetDifficulty < 1e-9) config->targetDifficulty = 1e-9;
     }
     if (s_paramRotation) {
         config->rotation = atoi(s_paramRotation->getValue());
@@ -106,10 +110,6 @@ static void saveParamsCallback() {
     }
     if (s_paramInvert) {
         config->invertColors = (atoi(s_paramInvert->getValue()) == 1);
-    }
-    if (s_paramDifficulty) {
-        config->targetDifficulty = atof(s_paramDifficulty->getValue());
-        if (config->targetDifficulty < 1e-9) config->targetDifficulty = 1e-9;
     }
 
     // Stats API
@@ -124,6 +124,13 @@ static void saveParamsCallback() {
     // Save to NVS
     if (nvs_config_save(config)) {
         Serial.println("[WIFI] Configuration saved successfully");
+
+        // Apply display settings immediately
+        #if USE_DISPLAY || USE_OLED_DISPLAY
+            display_set_brightness(config->brightness);
+            display_set_rotation(config->rotation);
+            display_set_inverted(config->invertColors);
+        #endif
 
         // Update stratum
         stratum_set_pool(config->poolUrl, config->poolPort,
@@ -321,20 +328,45 @@ void wifi_manager_init() {
         "<script>"
         // Sync dropdown values to hidden inputs on load and change
         "function syncDropdowns(){"
+        "console.log('[SYNC] Starting dropdown sync...');"
         "var dd=['bright','diff','rotation','tz','invert','https_stats'];"
         "dd.forEach(function(n){"
         "var sel=document.querySelector('select[name=\"'+n+'\"]');"
         "var inp=document.querySelector('input[name=\"'+n+'\"]');"
         "if(sel&&inp){"
+        "console.log('[SYNC] '+n+': select='+sel.value+', hidden='+inp.value+' -> syncing');"
         "inp.value=sel.value;"  // Sync on load
-        "sel.addEventListener('change',function(){inp.value=sel.value;});"  // Sync on change
+        "console.log('[SYNC] '+n+': after sync hidden='+inp.value);"
+        "sel.addEventListener('change',function(){"
+        "console.log('[CHANGE] '+n+': select changed to '+sel.value);"
+        "inp.value=sel.value;"
+        "console.log('[CHANGE] '+n+': hidden updated to '+inp.value);"
+        "});"
+        "}else{"
+        "console.log('[SYNC] '+n+': MISSING - sel='+!!sel+', inp='+!!inp);"
         "}"
         "});"
+        "console.log('[SYNC] Dropdown sync complete');"
         "}"
+        // Log all values before form submit
+        "function logFormValues(){"
+        "var dd=['bright','diff','rotation','tz','invert','https_stats'];"
+        "console.log('[SUBMIT] Form values before submit:');"
+        "dd.forEach(function(n){"
+        "var sel=document.querySelector('select[name=\"'+n+'\"]');"
+        "var inp=document.querySelector('input[name=\"'+n+'\"]');"
+        "console.log('[SUBMIT] '+n+': select='+(sel?sel.value:'N/A')+', hidden='+(inp?inp.value:'N/A'));"
+        "});"
+        "}"
+        // Attach submit handler
+        "document.addEventListener('DOMContentLoaded',function(){"
+        "var form=document.querySelector('form');"
+        "if(form){form.addEventListener('submit',logFormValues);}"
+        "});"
         // Run sync after DOM is fully loaded
         "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',syncDropdowns);}else{syncDropdowns();}"
         // SSID auto-fill when clicking network link
-        "function c(l){var s=document.querySelector('input[name=\"s\"]');if(s){s.value=l.innerText||l.textContent;}}"
+        "function c(l){console.log('[SSID] Clicked: '+l.innerText);var s=document.querySelector('input[name=\"s\"]');if(s){s.value=l.innerText||l.textContent;console.log('[SSID] Set to: '+s.value);}}"
         "</script>";
     s_wm.setCustomHeadElement(customCSS);
 
