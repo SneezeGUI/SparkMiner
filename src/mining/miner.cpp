@@ -33,7 +33,6 @@
 // Constants
 // ============================================================
 #define MAX_DIFFICULTY 0x1d00ffff
-#define CORE_0_YIELD_COUNT 256
 
 // ============================================================
 // Globals
@@ -43,6 +42,12 @@
 static volatile bool s_miningActive = false;
 static volatile bool s_core0Mining = false;
 static volatile bool s_core1Mining = false;
+
+// Hardware SHA mutex for dual-core sharing
+// Core 1 holds this during pipelined mining bursts
+// Core 0 can grab it during Core 1's yield periods
+static SemaphoreHandle_t s_shaMutex = NULL;
+static volatile bool s_core1HasSha = false;  // Fast check to avoid mutex overhead
 
 // Current job
 static block_header_t s_pendingBlock;
@@ -61,6 +66,10 @@ static double s_poolDifficulty = 1.0;
 
 // Statistics
 static mining_stats_t s_stats = {0};
+
+// DEBUG: Per-core hash counters to verify counting (non-static for extern access)
+volatile uint64_t s_core0Hashes = 0;
+volatile uint64_t s_core1Hashes = 0;
 
 // Nonce ranges for dual-core
 static unsigned long s_startNonce[2] = {0, 0x80000000};
@@ -323,15 +332,17 @@ static void hashCheck(const char *jobId, sha256_hash_t *ctx, uint32_t timestamp,
 
 void miner_init() {
     s_jobMutex = xSemaphoreCreateMutex();
+    s_shaMutex = xSemaphoreCreateMutex();  // For dual-core hardware SHA sharing
     s_stats.startTime = millis();
 
     // Initialize hardware SHA-256 peripheral
     sha256_hw_init();
-    
+
     // Run DMA-based SHA test at startup
     sha256_s3_dma_test();
-    
+
     Serial.println("[MINER] Initialized (Hardware SHA-256 via direct register access)");
+    Serial.println("[MINER] Dual-core hardware SHA sharing enabled");
 }
 
 void miner_start_job(const stratum_job_t *job) {
@@ -411,31 +422,38 @@ void miner_set_difficulty(double diff) {
     }
 }
 
+double miner_get_difficulty() {
+    return s_poolDifficulty;
+}
+
 void miner_set_extranonce(const char *extraNonce1, int extraNonce2Size) {
     strncpy(s_extraNonce1, extraNonce1, sizeof(s_extraNonce1) - 1);
     s_extraNonce2Size = extraNonce2Size > 8 ? 8 : extraNonce2Size;
 }
 
 // ============================================================
-// Mining Task - Core 0 (BitsyMiner Software SHA-256 with Midstate)
+// Mining Task - Core 0 (Hybrid: Hardware SHA when available, Software fallback)
 // ============================================================
 
 void miner_task_core0(void *param) {
     block_header_t hb;
     sha256_hash_t ctx;
-    sha256_hash_t midstate;
+    sha256_hash_t sw_midstate;  // Software midstate for fallback
+    uint32_t hw_midstate[8];    // Hardware midstate for opportunistic HW SHA
     char jobId[MAX_JOB_ID_LEN];
     uint32_t minerId = 0;
     uint32_t yieldCounter = 0;
+    uint32_t hwHashes = 0;  // Track hardware SHA usage
+    uint32_t swHashes = 0;  // Track software SHA usage
 
-    Serial.printf("[MINER0] Started on core %d (BitsyMiner SOFTWARE SHA, priority %d)\n",
+    Serial.printf("[MINER0] Started on core %d (HYBRID HW/SW SHA, priority %d)\n",
                   xPortGetCoreID(), uxTaskPriorityGet(NULL));
 
     // Wait for first job
     while (!s_miningActive) {
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
-    Serial.println("[MINER0] Got first job, starting BitsyMiner midstate mining loop");
+    Serial.println("[MINER0] Got first job, starting hybrid mining (HW when Core 1 yields)");
 
     while (true) {
         if (!s_miningActive) {
@@ -453,20 +471,34 @@ void miner_task_core0(void *param) {
         hb.nonce = s_startNonce[minerId];
         xSemaphoreGive(s_jobMutex);
 
-        // BitsyMiner pattern: Compute midstate ONCE per job (first 64 bytes)
-        // This is 75% less SHA work per nonce iteration!
-        miner_sha256_midstate(&midstate, &hb);
+        // Always compute SOFTWARE midstate (for fallback and verification)
+        miner_sha256_midstate(&sw_midstate, &hb);
+
+        // Prepare byte-swapped header for hardware SHA
+        uint32_t header_swapped[20];
+        uint32_t *header_words = (uint32_t *)&hb;
+        for (int i = 0; i < 20; i++) {
+            header_swapped[i] = __builtin_bswap32(header_words[i]);
+        }
+
+        // Try to compute hardware midstate if we can grab the mutex
+        bool hasHwMidstate = false;
+        if (!s_core1HasSha && xSemaphoreTake(s_shaMutex, 0) == pdTRUE) {
+            sha256_ll_acquire();
+            sha256_ll_midstate(hw_midstate, (const uint8_t *)header_swapped);
+            sha256_ll_release();
+            xSemaphoreGive(s_shaMutex);
+            hasHwMidstate = true;
+        }
 
         while (s_miningActive) {
-            // BitsyMiner pattern: Only hash the tail (16 bytes + nonce) using midstate
-            // Early 16-bit reject is built into miner_sha256_header()
-            if (miner_sha256_header(&midstate, &ctx, &hb)) {
-                // 16-bit check passed - potential share
+            // Pure software SHA - no hardware contention with Core 1
+            if (miner_sha256_header(&sw_midstate, &ctx, &hb)) {
                 hashCheck(jobId, &ctx, hb.timestamp, hb.nonce);
             }
-
             hb.nonce++;
             s_stats.hashes++;
+            s_core0Hashes++;  // DEBUG: Track Core 0 contribution
             yieldCounter++;
 
             // Yield every 256 hashes to let monitor/WiFi tasks run
@@ -531,7 +563,7 @@ void miner_task_core1(void *param) {
     char jobId[MAX_JOB_ID_LEN];
     uint32_t minerId = 1;
 
-    Serial.printf("[MINER1] Started on core %d (PIPELINED ASM + BitsyMiner SW verify, priority %d)\n",
+    Serial.printf("[MINER1] Started on core %d (PIPELINED ASM v3, priority %d)\n",
                   xPortGetCoreID(), uxTaskPriorityGet(NULL));
 
     // Enable SHA peripheral clock and clear reset
@@ -542,13 +574,14 @@ void miner_task_core1(void *param) {
     while (!s_miningActive) {
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
-    Serial.println("[MINER1] Got first job, starting pipelined mining with BitsyMiner verification");
+    Serial.println("[MINER1] Got first job, starting pipelined mining v3");
 
     // SHA peripheral base address
     volatile uint32_t *sha_base = (volatile uint32_t *)0x3FF03000;  // SHA_TEXT_BASE
 
     while (true) {
         if (!s_miningActive) {
+            s_core1HasSha = false;  // Release SHA indicator when not mining
             vTaskDelay(100 / portTICK_PERIOD_MS);
             continue;
         }
@@ -575,15 +608,17 @@ void miner_task_core1(void *param) {
         // Set starting nonce (in swapped format for hardware)
         uint32_t nonce_swapped = __builtin_bswap32(s_startNonce[minerId]);
 
+        // Acquire SHA mutex and set fast-check flag
+        xSemaphoreTake(s_shaMutex, portMAX_DELAY);
+        s_core1HasSha = true;
+
         // Re-initialize SHA hardware before loop
         DPORT_REG_SET_BIT(DPORT_PERI_CLK_EN_REG, DPORT_PERI_EN_SHA);
         DPORT_REG_CLR_BIT(DPORT_PERI_RST_EN_REG, DPORT_PERI_EN_SHA | DPORT_PERI_EN_SECUREBOOT);
 
         while (s_miningActive) {
-            // Run OPTIMIZED pipelined assembly mining loop (v2)
-            // - Unrolled zero loop (eliminates loop overhead)
-            // - Persistent zero register
-            bool candidate = sha256_pipelined_mine_v2(
+            // Run pipelined assembly mining loop v3 (working version)
+            bool candidate = sha256_pipelined_mine_v3(
                 sha_base,
                 header_swapped,
                 &nonce_swapped,
@@ -623,6 +658,10 @@ void miner_task_core1(void *param) {
                 DPORT_REG_CLR_BIT(DPORT_PERI_RST_EN_REG, DPORT_PERI_EN_SHA | DPORT_PERI_EN_SECUREBOOT);
             }
         }
+
+        // Release SHA mutex when done
+        s_core1HasSha = false;
+        xSemaphoreGive(s_shaMutex);
 
         s_core1Mining = false;
         vTaskDelay(20 / portTICK_PERIOD_MS);

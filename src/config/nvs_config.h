@@ -45,9 +45,12 @@ typedef struct {
     double targetDifficulty;
 
     // Stats API settings
-    // Proxy URL format: http://[user:pass@]host:port
-    // When proxy is set, HTTPS stats are auto-enabled via proxy
-    // When proxy is empty and enableHttpsStats=true, direct HTTPS (unstable)
+    // Priority: statsApiUrl > statsProxyUrl > enableHttpsStats
+    // 1. statsApiUrl: Custom HTTP endpoint returning all stats (e.g., stratum proxy /stats)
+    // 2. statsProxyUrl: HTTP proxy with SSL bumping for external HTTPS APIs
+    // 3. enableHttpsStats: Direct HTTPS (unstable, impacts hashrate)
+    bool statsEnabled;          // Master enable/disable for live stats (default: true)
+    char statsApiUrl[128];      // Custom unified stats API endpoint (HTTP, no SSL)
     char statsProxyUrl[128];    // HTTP proxy for stats APIs (supports auth)
     bool enableHttpsStats;      // Manual override for direct HTTPS (default: false)
 

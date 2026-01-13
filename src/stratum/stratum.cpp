@@ -13,17 +13,17 @@
 #include "stratum.h"
 #include "../mining/miner.h"
 
-// ============================================================
+// ============================================================ 
 // Constants
-// ============================================================
+// ============================================================ 
 #define STRATUM_MSG_BUFFER  512
 #define RESPONSE_TIMEOUT_MS 3000
 #define KEEPALIVE_MS        120000
 #define INACTIVITY_MS       700000
 
-// ============================================================
+// ============================================================ 
 // Global State
-// ============================================================
+// ============================================================ 
 static QueueHandle_t s_submitQueue = NULL;
 static submit_entry_t s_pendingResponses[MAX_PENDING_SUBMISSIONS];
 static uint16_t s_pendingIndex = 0;
@@ -36,6 +36,9 @@ static volatile bool s_isConnected = false;
 static volatile bool s_reconnectRequested = false;
 static char s_currentPoolUrl[MAX_POOL_URL_LEN] = {0};
 
+// Stores the fully authorized username (e.g. "wallet.worker") for use in submissions
+static char s_authorizedWorkerName[MAX_WALLET_LEN + 34] = {0};
+
 static uint32_t s_messageId = 1;
 static uint32_t s_lastActivity = 0;
 static uint32_t s_lastSubmit = 0;
@@ -47,9 +50,9 @@ static int s_extraNonce2Size = 4;
 // JSON document for parsing
 static StaticJsonDocument<4096> s_doc;
 
-// ============================================================
+// ============================================================ 
 // Utility Functions
-// ============================================================
+// ============================================================ 
 
 static uint32_t getNextId() {
     if (s_messageId == UINT32_MAX) {
@@ -104,9 +107,9 @@ static String readBoundedLine(WiFiClient& client, size_t maxLen = 4096) {
     return line;
 }
 
-// ============================================================
+// ============================================================ 
 // Protocol Functions
-// ============================================================
+// ============================================================ 
 
 static bool sendMessage(WiFiClient &client, const char *msg) {
     if (!client.connected()) return false;
@@ -359,7 +362,7 @@ static bool waitForResponseById(WiFiClient &client, uint32_t expectedId, String 
     return false;
 }
 
-static bool subscribe(WiFiClient &client, const char *wallet, const char *password) {
+static bool subscribe(WiFiClient &client, const char *wallet, const char *password, const char *workerName) {
     char msg[STRATUM_MSG_BUFFER];
 
     // Set client timeout for blocking reads
@@ -404,11 +407,14 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
 
     // Mining.authorize - append worker name if set
     char fullUsername[MAX_WALLET_LEN + 34];
-    if (s_primaryPool.workerName[0]) {
-        snprintf(fullUsername, sizeof(fullUsername), "%s.%s", wallet, s_primaryPool.workerName);
+    if (workerName && workerName[0]) {
+        snprintf(fullUsername, sizeof(fullUsername), "%s.%s", wallet, workerName);
     } else {
         safeStrCpy(fullUsername, wallet, sizeof(fullUsername));
     }
+    
+    // Store authorized worker name for submissions
+    safeStrCpy(s_authorizedWorkerName, fullUsername, sizeof(s_authorizedWorkerName));
 
     uint32_t authId = getNextId();
     snprintf(msg, sizeof(msg),
@@ -437,7 +443,7 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
         return false;
     }
 
-    Serial.printf("[STRATUM] Authorized as %s\n", wallet);
+    Serial.printf("[STRATUM] Authorized as %s\n", fullUsername);
     return true;
 }
 
@@ -455,7 +461,7 @@ static void submitShare(WiFiClient &client, const submit_entry_t *entry) {
     snprintf(msg, sizeof(msg),
         "{\"id\":%lu,\"method\":\"mining.submit\",\"params\":[\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"]}",
         msgId,
-        s_primaryPool.wallet,
+        s_authorizedWorkerName, // Use the full worker name used during authorization
         entry->jobId,
         entry->extraNonce2,
         timestamp,
@@ -478,9 +484,9 @@ static void submitShare(WiFiClient &client, const submit_entry_t *entry) {
     }
 }
 
-// ============================================================
+// ============================================================ 
 // Public API
-// ============================================================
+// ============================================================ 
 
 void stratum_init() {
     // Create submission queue
@@ -554,7 +560,7 @@ void stratum_task(void *param) {
 
             // STABILITY FIX: Use connect timeout (10s) to prevent long blocks
             if (client.connect(s_primaryPool.url, s_primaryPool.port, 10000)) {
-                if (subscribe(client, s_primaryPool.wallet, s_primaryPool.password)) {
+                if (subscribe(client, s_primaryPool.wallet, s_primaryPool.password, s_primaryPool.workerName)) {
                     s_isConnected = true;
                     s_lastActivity = millis();
                     safeStrCpy(s_currentPoolUrl, s_primaryPool.url, MAX_POOL_URL_LEN);
@@ -572,7 +578,7 @@ void stratum_task(void *param) {
 
                     // STABILITY FIX: Use connect timeout (10s)
                     if (client.connect(s_backupPool.url, s_backupPool.port, 10000)) {
-                        if (subscribe(client, s_backupPool.wallet, s_backupPool.password)) {
+                        if (subscribe(client, s_backupPool.wallet, s_backupPool.password, s_backupPool.workerName)) {
                             s_isConnected = true;
                             usingBackup = true;
                             backupConnectTime = millis();
@@ -600,7 +606,7 @@ void stratum_task(void *param) {
             // Test connection to primary pool first
             WiFiClient testClient;
             if (testClient.connect(s_primaryPool.url, s_primaryPool.port, 10000)) {
-                if (subscribe(testClient, s_primaryPool.wallet, s_primaryPool.password)) {
+                if (subscribe(testClient, s_primaryPool.wallet, s_primaryPool.password, s_primaryPool.workerName)) {
                     // Successfully connected to primary - switch over
                     miner_stop();
                     client.stop();
@@ -663,6 +669,12 @@ void stratum_reconnect() {
 
 bool stratum_is_connected() {
     return s_isConnected;
+}
+
+bool stratum_is_backup() {
+    if (!s_isConnected) return false;
+    // Compare current URL with primary URL
+    return strncmp(s_currentPoolUrl, s_primaryPool.url, MAX_POOL_URL_LEN) != 0;
 }
 
 const char* stratum_get_pool() {

@@ -50,6 +50,11 @@ void stratum_reconnect();
 bool stratum_is_connected();
 
 /**
+ * Check if currently connected to backup pool
+ */
+bool stratum_is_backup();
+
+/**
  * Get current pool URL
  */
 const char* stratum_get_pool();

@@ -376,7 +376,14 @@
 #define MINER_0_CORE        CORE_0
 #define MINER_0_PRIORITY    1
 #define MINER_0_STACK       8000    // Increased for SHA stack usage
-#define MINER_0_YIELD_COUNT 256     // Yield every N hashes
+
+// Core 0 mining yield configuration
+// Higher = more hashes per yield, but UI/WiFi may lag
+// Lower = more responsive UI, but fewer hashes from Core 0
+// Values: 128 (responsive), 256 (default), 512 (throughput), 1024 (max)
+#ifndef CORE_0_YIELD_COUNT
+    #define CORE_0_YIELD_COUNT 256
+#endif
 
 // Miner on Core 1 (highest priority, dedicated)
 #define MINER_1_CORE        CORE_1

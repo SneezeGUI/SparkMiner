@@ -45,6 +45,11 @@ static char s_proxyAuth[128] = {0};  // Base64 encoded user:pass
 static bool s_proxyConfigured = false;
 static bool s_httpsEnabled = false;
 
+// Stats configuration
+static bool s_statsEnabled = true;       // Master enable/disable
+static char s_customApiUrl[128] = {0};   // Custom unified stats API endpoint
+static uint32_t s_lastCustomApiUpdate = 0;
+
 // Error rate limiting
 static uint32_t s_lastErrorLog = 0;
 static uint32_t s_errorCount = 0;
@@ -531,6 +536,115 @@ static void checkProxyHealth() {
 }
 
 // ============================================================
+// Custom API Endpoint (Unified Stats)
+// ============================================================
+
+/**
+ * Fetch stats from custom unified API endpoint (e.g., stratum proxy /stats)
+ * This endpoint returns all external stats in one HTTP call, avoiding
+ * HTTPS overhead on ESP32.
+ *
+ * Expected response format:
+ * {
+ *   "btc_price_usd": 105420.50,
+ *   "block_height": 881234,
+ *   "network_hashrate": "789.5 EH/s",
+ *   "network_difficulty": "95.67T",
+ *   "fee_half_hour": 12,
+ *   "fee_fastest": 25,
+ *   "external_stats_age": 45
+ * }
+ */
+static bool fetchFromCustomApi() {
+    if (s_customApiUrl[0] == '\0') return false;
+
+    s_jsonDoc.clear();
+    if (!fetchHttp(s_customApiUrl, s_jsonDoc)) {
+        logError("Custom API", -1);
+        return false;
+    }
+
+    xSemaphoreTake(s_statsMutex, portMAX_DELAY);
+
+    // BTC Price
+    if (s_jsonDoc.containsKey("btc_price_usd")) {
+        float price = s_jsonDoc["btc_price_usd"];
+        if (price > 0) {
+            s_stats.btcPriceUsd = price;
+            s_stats.priceTimestamp = millis();
+            s_stats.priceValid = true;
+        }
+    }
+
+    // Block height
+    if (s_jsonDoc.containsKey("block_height")) {
+        uint32_t height = s_jsonDoc["block_height"];
+        if (height > 0) {
+            s_stats.blockHeight = height;
+            s_stats.blockTimestamp = millis();
+            s_stats.blockValid = true;
+        }
+    }
+
+    // Network hashrate (pre-formatted string from proxy)
+    if (s_jsonDoc.containsKey("network_hashrate")) {
+        const char *hr = s_jsonDoc["network_hashrate"];
+        if (hr && strlen(hr) > 0) {
+            strncpy(s_stats.networkHashrate, hr, sizeof(s_stats.networkHashrate) - 1);
+            s_stats.networkHashrate[sizeof(s_stats.networkHashrate) - 1] = '\0';
+            s_stats.networkValid = true;
+        }
+    }
+
+    // Network difficulty (pre-formatted string from proxy)
+    if (s_jsonDoc.containsKey("network_difficulty")) {
+        const char *diff = s_jsonDoc["network_difficulty"];
+        if (diff && strlen(diff) > 0) {
+            strncpy(s_stats.networkDifficulty, diff, sizeof(s_stats.networkDifficulty) - 1);
+            s_stats.networkDifficulty[sizeof(s_stats.networkDifficulty) - 1] = '\0';
+        }
+    }
+
+    // Fees
+    if (s_jsonDoc.containsKey("fee_half_hour")) {
+        s_stats.halfHourFee = s_jsonDoc["fee_half_hour"];
+        s_stats.feesTimestamp = millis();
+        s_stats.feesValid = true;
+    }
+    if (s_jsonDoc.containsKey("fee_fastest")) {
+        s_stats.fastestFee = s_jsonDoc["fee_fastest"];
+    }
+    if (s_jsonDoc.containsKey("fee_hour")) {
+        s_stats.hourFee = s_jsonDoc["fee_hour"];
+    }
+
+    // Pool Stats from Proxy
+    if (s_jsonDoc.containsKey("workers")) {
+        s_stats.poolWorkersCount = s_jsonDoc["workers"];
+        s_stats.poolValid = true;
+    }
+
+    if (s_jsonDoc.containsKey("failovers")) {
+        s_stats.failovers = s_jsonDoc["failovers"];
+    }
+
+    if (s_jsonDoc.containsKey("pool_name")) {
+        const char *name = s_jsonDoc["pool_name"];
+        if (name) {
+            strncpy(s_stats.poolName, name, sizeof(s_stats.poolName) - 1);
+            s_stats.poolName[sizeof(s_stats.poolName) - 1] = '\0';
+            s_stats.poolValid = true;
+        }
+    }
+
+    xSemaphoreGive(s_statsMutex);
+
+    Serial.printf("[STATS] Custom API updated: BTC $%.0f, Block %lu, Workers %d\n",
+                  s_stats.btcPriceUsd, s_stats.blockHeight, s_stats.poolWorkersCount);
+    return true;
+}
+
+// ============================================================
 // API Updaters
 // ============================================================
 
@@ -741,20 +855,40 @@ static void updateNetworkDifficulty() {
 void live_stats_init() {
     s_statsMutex = xSemaphoreCreateMutex();
 
-    // Load proxy config
+    // Load stats config
     miner_config_t *config = nvs_config_get();
+
+    // Master enable/disable
+    s_statsEnabled = config->statsEnabled;
+    if (!s_statsEnabled) {
+        Serial.println("[STATS] Live stats DISABLED by user");
+        return;  // Don't start task if disabled
+    }
+
+    // Custom API endpoint (highest priority)
+    if (config->statsApiUrl[0]) {
+        strncpy(s_customApiUrl, config->statsApiUrl, sizeof(s_customApiUrl) - 1);
+        s_customApiUrl[sizeof(s_customApiUrl) - 1] = '\0';
+        Serial.printf("[STATS] Custom API endpoint: %s\n", s_customApiUrl);
+    }
+
+    // HTTP proxy config
     if (config->statsProxyUrl[0]) {
         parseProxyUrl(config->statsProxyUrl);
     }
+
+    // Direct HTTPS mode
     s_httpsEnabled = config->enableHttpsStats;
 
-    // Log configuration
-    if (s_proxyConfigured) {
-        Serial.println("[STATS] HTTPS stats enabled via proxy");
+    // Log configuration priority
+    if (s_customApiUrl[0]) {
+        Serial.println("[STATS] Mode: Custom API (HTTP - no SSL overhead)");
+    } else if (s_proxyConfigured) {
+        Serial.println("[STATS] Mode: Proxy (HTTPS via SSL bumping)");
     } else if (s_httpsEnabled) {
-        Serial.println("[STATS] HTTPS stats enabled (direct - may affect stability)");
+        Serial.println("[STATS] Mode: Direct HTTPS (may affect hashrate)");
     } else {
-        Serial.println("[STATS] HTTPS stats disabled (HTTP APIs only)");
+        Serial.println("[STATS] Mode: HTTP-only (block height, fees)");
     }
 
     // Start background task
@@ -771,6 +905,13 @@ void live_stats_init() {
 
 const live_stats_t *live_stats_get() {
     return &s_stats;
+}
+
+void live_stats_get_copy(live_stats_t *dest) {
+    if (!dest) return;
+    xSemaphoreTake(s_statsMutex, portMAX_DELAY);
+    memcpy(dest, &s_stats, sizeof(live_stats_t));
+    xSemaphoreGive(s_statsMutex);
 }
 
 void live_stats_set_wallet(const char *wallet) {
@@ -802,6 +943,7 @@ void live_stats_task(void *param) {
     s_lastPriceUpdate = bootTime - UPDATE_PRICE_MS - 3000;
     s_lastPoolUpdate = bootTime - UPDATE_POOL_MS - 4000;
     s_lastNetworkUpdate = bootTime - UPDATE_NETWORK_MS - 5000;
+    s_lastCustomApiUpdate = bootTime - UPDATE_PRICE_MS - 1000;
 
     Serial.println("[STATS] Task started");
 
@@ -809,42 +951,53 @@ void live_stats_task(void *param) {
         if (WiFi.status() == WL_CONNECTED) {
             uint32_t now = millis();
 
-            // Check proxy health periodically
-            checkProxyHealth();
+            // Priority 1: Custom API endpoint (fetches all stats in one call)
+            if (s_customApiUrl[0]) {
+                if (now - s_lastCustomApiUpdate > UPDATE_PRICE_MS) {
+                    fetchFromCustomApi();
+                    s_lastCustomApiUpdate = millis();
+                    vTaskDelay(500 / portTICK_PERIOD_MS);
+                }
+            } else {
+                // Priority 2/3/4: Use individual APIs
 
-            // Stagger updates with generous yields
-            if (now - s_lastBlockUpdate > UPDATE_BLOCK_MS) {
-                updateBlockHeight();
-                s_lastBlockUpdate = millis();
-                vTaskDelay(500 / portTICK_PERIOD_MS);
-            }
+                // Check proxy health periodically
+                checkProxyHealth();
 
-            if (now - s_lastFeesUpdate > UPDATE_FEES_MS) {
-                updateFees();
-                s_lastFeesUpdate = millis();
-                vTaskDelay(500 / portTICK_PERIOD_MS);
-            }
-
-            // HTTPS APIs (only if proxy or direct HTTPS enabled)
-            if (s_proxyConfigured || s_httpsEnabled) {
-                if (now - s_lastPriceUpdate > UPDATE_PRICE_MS) {
-                    updatePrice();
-                    s_lastPriceUpdate = millis();
+                // HTTP APIs (always available - no SSL)
+                if (now - s_lastBlockUpdate > UPDATE_BLOCK_MS) {
+                    updateBlockHeight();
+                    s_lastBlockUpdate = millis();
                     vTaskDelay(500 / portTICK_PERIOD_MS);
                 }
 
-                if (now - s_lastPoolUpdate > UPDATE_POOL_MS) {
-                    updatePoolStats();
-                    s_lastPoolUpdate = millis();
+                if (now - s_lastFeesUpdate > UPDATE_FEES_MS) {
+                    updateFees();
+                    s_lastFeesUpdate = millis();
                     vTaskDelay(500 / portTICK_PERIOD_MS);
                 }
 
-                if (now - s_lastNetworkUpdate > UPDATE_NETWORK_MS) {
-                    updateNetworkHashrate();
-                    vTaskDelay(500 / portTICK_PERIOD_MS);
-                    updateNetworkDifficulty();
-                    s_lastNetworkUpdate = millis();
-                    vTaskDelay(500 / portTICK_PERIOD_MS);
+                // HTTPS APIs (only if proxy or direct HTTPS enabled)
+                if (s_proxyConfigured || s_httpsEnabled) {
+                    if (now - s_lastPriceUpdate > UPDATE_PRICE_MS) {
+                        updatePrice();
+                        s_lastPriceUpdate = millis();
+                        vTaskDelay(500 / portTICK_PERIOD_MS);
+                    }
+
+                    if (now - s_lastPoolUpdate > UPDATE_POOL_MS) {
+                        updatePoolStats();
+                        s_lastPoolUpdate = millis();
+                        vTaskDelay(500 / portTICK_PERIOD_MS);
+                    }
+
+                    if (now - s_lastNetworkUpdate > UPDATE_NETWORK_MS) {
+                        updateNetworkHashrate();
+                        vTaskDelay(500 / portTICK_PERIOD_MS);
+                        updateNetworkDifficulty();
+                        s_lastNetworkUpdate = millis();
+                        vTaskDelay(500 / portTICK_PERIOD_MS);
+                    }
                 }
             }
         }

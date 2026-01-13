@@ -16,6 +16,16 @@
 #include <OneButton.h>
 #include <soc/soc_caps.h>  // For SOC_CPU_CORES_NUM
 
+// For CPU overclocking
+#if defined(CONFIG_IDF_TARGET_ESP32)
+#include <soc/rtc.h>
+#include <soc/rtc_cntl_reg.h>
+#include <esp32/rom/rtc.h>
+extern "C" {
+    #include <esp_private/esp_clk.h>
+}
+#endif
+
 #include <board_config.h>
 #include "mining/miner.h"
 #include "stratum/stratum_types.h"
@@ -128,6 +138,65 @@ void setupPowerManagement();
 void setupTasks();
 void printBanner();
 void checkFactoryReset();
+uint32_t tryOverclock();
+
+/**
+ * Attempt CPU overclock using 320MHz PLL
+ * ESP32 valid PLL configs:
+ *   - 480MHz PLL / 2 = 240MHz (standard)
+ *   - 320MHz PLL / 1 = 320MHz (overclock, may not be stable)
+ *   - 320MHz PLL / 2 = 160MHz
+ *
+ * Returns the achieved frequency
+ */
+uint32_t tryOverclock() {
+#if defined(CONFIG_IDF_TARGET_ESP32)
+    Serial.println("[OVERCLOCK] Attempting 320MHz overclock...");
+    Serial.flush();  // Ensure message is sent before clock change
+
+    uint32_t baseFreq = getCpuFrequencyMhz();
+    Serial.printf("[OVERCLOCK] Base frequency: %u MHz\n", baseFreq);
+    Serial.flush();
+
+    // Configure for 320MHz PLL with divider 1
+    rtc_cpu_freq_config_t conf;
+    conf.source = RTC_CPU_FREQ_SRC_PLL;
+    conf.source_freq_mhz = 320;  // 320MHz PLL
+    conf.div = 1;                // div=1 = 320MHz output
+    conf.freq_mhz = 320;
+
+    // Apply the configuration
+    rtc_clk_cpu_freq_set_config(&conf);
+
+    // Adjust serial baud rate for new clock (320/240 ratio)
+    // Serial internally uses APB clock which may change
+    delay(10);
+
+    // Quick stability test
+    volatile uint32_t dummy = 0;
+    for (int j = 0; j < 100000; j++) {
+        dummy += j * 17;
+        dummy ^= (dummy >> 3);
+    }
+
+    // Verify the frequency
+    uint32_t actualFreq = getCpuFrequencyMhz();
+
+    if (actualFreq >= 300) {
+        Serial.printf("[OVERCLOCK] SUCCESS at %u MHz!\n", actualFreq);
+        return actualFreq;
+    }
+
+    // Failed, revert to 240MHz
+    setCpuFrequencyMhz(240);
+    Serial.printf("[OVERCLOCK] Failed (got %u MHz), using 240 MHz\n", actualFreq);
+    return 240;
+
+#else
+    Serial.println("[OVERCLOCK] Not supported on this chip variant");
+    return getCpuFrequencyMhz();
+#endif
+}
 
 /**
  * Check if boot button is held for factory reset
@@ -213,6 +282,11 @@ void setup() {
 
     // Disable power management (no CPU throttling/sleep)
     setupPowerManagement();
+
+    // NOTE: ESP32 overclocking via PLL manipulation causes boot loops
+    // This ESP32-D0WD-V3 chip cannot exceed 240MHz
+    // NMMiner's 1000 KH/s must come from SHA optimization, not overclocking
+    Serial.printf("[INIT] Running at %u MHz\n", getCpuFrequencyMhz());
 
     // Initialize NVS configuration
     nvs_config_init();

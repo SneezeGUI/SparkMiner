@@ -124,10 +124,28 @@ static bool loadConfigFromFile(miner_config_t *config) {
     Serial.printf("[CONFIG] SD_MMC Card Size: %lluMB\n", SD_MMC.cardSize() / (1024 * 1024));
     Serial.println("[CONFIG] SD_MMC initialized successfully");
 #else
-    if (!SD.begin(SD_CS_PIN)) {
-        Serial.println("[CONFIG] SD card not found or failed to mount");
+    // SPI SD mode (CYD boards)
+    // Give SD card time to power up after boot
+    Serial.println("[CONFIG] Waiting for SD card power-up...");
+    delay(500);
+
+    // Try to initialize with retries
+    bool sdReady = false;
+    for (int attempt = 1; attempt <= 3 && !sdReady; attempt++) {
+        Serial.printf("[CONFIG] SD.begin() attempt %d/3...\n", attempt);
+        if (SD.begin(SD_CS_PIN)) {
+            sdReady = true;
+        } else {
+            Serial.println("[CONFIG] SD init failed, retrying...");
+            delay(500);
+        }
+    }
+
+    if (!sdReady) {
+        Serial.println("[CONFIG] SD card not found or failed to mount after 3 attempts");
         return false;
     }
+    Serial.println("[CONFIG] SD card initialized successfully");
 #endif
 
     if (!SD_FS.exists(CONFIG_FILE_PATH)) {
@@ -143,15 +161,42 @@ static bool loadConfigFromFile(miner_config_t *config) {
         return false;
     }
 
-    Serial.println("[CONFIG] Found config.json on SD card, loading...");
+    // Read entire file into String first (more reliable than streaming)
+    size_t fileSize = file.size();
+    Serial.printf("[CONFIG] Found config.json (%d bytes), loading...\n", fileSize);
 
-    StaticJsonDocument<1024> doc;
-    DeserializationError err = deserializeJson(doc, file);
+    if (fileSize > 4000) {
+        Serial.println("[CONFIG] Config file too large (max 4KB)");
+        file.close();
+        SD_FS.end();
+        return false;
+    }
+
+    String jsonStr = file.readString();
     file.close();
     SD_FS.end();
 
+    if (jsonStr.length() == 0) {
+        Serial.println("[CONFIG] Failed to read config file contents");
+        return false;
+    }
+
+    Serial.printf("[CONFIG] Read %d bytes from config.json\n", jsonStr.length());
+
+    // Debug: show first and last characters to verify content
+    if (jsonStr.length() > 0) {
+        Serial.printf("[CONFIG] First char: '%c' (0x%02X), Last char: '%c' (0x%02X)\n",
+                      jsonStr[0], (uint8_t)jsonStr[0],
+                      jsonStr[jsonStr.length()-1], (uint8_t)jsonStr[jsonStr.length()-1]);
+    }
+
+    StaticJsonDocument<4096> doc;
+    DeserializationError err = deserializeJson(doc, jsonStr);
+
     if (err) {
         Serial.printf("[CONFIG] JSON parse error: %s\n", err.c_str());
+        // Show more context around the error
+        Serial.printf("[CONFIG] Content preview: %.100s...\n", jsonStr.c_str());
         return false;
     }
 
@@ -215,6 +260,12 @@ static bool loadConfigFromFile(miner_config_t *config) {
     }
 
     // Stats API settings (optional)
+    if (doc.containsKey("stats_enabled")) {
+        config->statsEnabled = doc["stats_enabled"];
+    }
+    if (doc.containsKey("stats_api_url")) {
+        safeStrCpy(config->statsApiUrl, doc["stats_api_url"], sizeof(config->statsApiUrl));
+    }
     if (doc.containsKey("stats_proxy_url")) {
         safeStrCpy(config->statsProxyUrl, doc["stats_proxy_url"], sizeof(config->statsProxyUrl));
     }
@@ -370,6 +421,9 @@ static bool loadStatsFromSD(mining_persistence_t *stats) {
 void nvs_config_init() {
     if (s_initialized) return;
 
+    // Brief delay to ensure flash controller is stable after boot/flash
+    delay(100);
+
     // Initialize with defaults first
     nvs_config_reset(&s_config);
 
@@ -522,7 +576,9 @@ void nvs_config_reset(miner_config_t *config) {
     safeStrCpy(config->workerName, "SparkMiner", sizeof(config->workerName));
     config->targetDifficulty = DESIRED_DIFFICULTY;
 
-    // Stats API defaults - HTTPS disabled by default for stability
+    // Stats API defaults - enabled but no external fetch by default
+    config->statsEnabled = true;      // Live stats enabled
+    config->statsApiUrl[0] = '\0';    // No custom API endpoint
     config->statsProxyUrl[0] = '\0';  // No proxy by default
     config->enableHttpsStats = false; // Direct HTTPS disabled (causes WDT crashes)
 

@@ -297,6 +297,7 @@ static void drawHeader(const display_data_t *data) {
         s_tft.setCursor(poolX, 6);
         s_tft.print("POOL");
         uint16_t pingColor = data->poolConnected ? getPingColor(data->avgLatency) : COLOR_ERROR;
+        if (data->poolConnected && data->poolFailovers > 0) pingColor = COLOR_WARNING;
         s_tft.fillCircle(poolX + 6, 26, 5, pingColor);
         if (data->poolConnected && data->avgLatency > 0) {
             s_tft.setTextColor(pingColor);
@@ -378,6 +379,7 @@ static void drawBottomStatusBar(const display_data_t *data) {
     s_tft.setCursor(poolX, centerY - 6);
     s_tft.print("POOL");
     uint16_t pingColor = data->poolConnected ? getPingColor(data->avgLatency) : COLOR_ERROR;
+    if (data->poolConnected && data->poolFailovers > 0) pingColor = COLOR_WARNING;
     s_tft.fillCircle(poolX + 4, centerY + 8, 4, pingColor);
     if (data->poolConnected && data->avgLatency > 0) {
         s_tft.setTextColor(pingColor);
@@ -426,12 +428,11 @@ static void drawMiningScreen(const display_data_t *data) {
         {"Best",     formatDifficulty(data->bestDifficulty), COLOR_SPARK1},
         {"Hashes",   formatNumber(data->totalHashes), COLOR_FG},
         {"Uptime",   formatUptime(data->uptimeSeconds), COLOR_FG},
-        {"Jobs",     String(data->templates), COLOR_FG},
         {"32-bit",   String(data->blocks32), COLOR_SPARK2},
         {"Blocks",   String(data->blocksFound), COLOR_SUCCESS},
     };
 
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 5; i++) {
         int col = i % cols;
         int row = i / cols;
         int x = MARGIN + col * (boxW + MARGIN);
@@ -462,7 +463,13 @@ static void drawMiningScreen(const display_data_t *data) {
     s_tft.setTextColor(COLOR_DIM);
     s_tft.setCursor(MARGIN + 2, y);
     s_tft.print("Pool: ");
-    s_tft.setTextColor(data->poolConnected ? COLOR_SUCCESS : COLOR_ERROR);
+    
+    // Status color: Green if connected, Warning if failover active, Red if disconnected
+    uint16_t statusColor = COLOR_ERROR;
+    if (data->poolConnected) {
+        statusColor = (data->poolFailovers > 0) ? COLOR_WARNING : COLOR_SUCCESS;
+    }
+    s_tft.setTextColor(statusColor);
     
     // Truncate pool name if needed
     String poolName = data->poolName ? data->poolName : "Disconnected";
@@ -485,14 +492,12 @@ static void drawMiningScreen(const display_data_t *data) {
     s_tft.setTextColor(COLOR_FG);
     s_tft.print(formatDifficulty(data->poolDifficulty));
 
-    // Your workers on address
-    if (data->poolWorkersAddress > 0) {
-        s_tft.setTextColor(COLOR_DIM);
-        s_tft.setCursor(w - 90, y);
-        s_tft.print("You: ");
-        s_tft.setTextColor(COLOR_ACCENT);
-        s_tft.print(String(data->poolWorkersAddress));
-    }
+    // Jobs count on right side of Diff line
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(w - 90, y);
+    s_tft.print("Jobs: ");
+    s_tft.setTextColor(COLOR_FG);
+    s_tft.print(String(data->templates));
 
     y += 14;
 

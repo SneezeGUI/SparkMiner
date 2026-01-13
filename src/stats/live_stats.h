@@ -75,6 +75,8 @@ typedef struct {
 
     // Pool stats (if using public-pool.io)
     int poolWorkersCount;
+    int failovers;                // Number of failovers from proxy
+    char poolName[32];            // Friendly pool name from proxy
     char poolTotalHashrate[24];   // Fixed char array
     char poolBestDifficulty[24];  // Fixed char array
 
@@ -103,9 +105,16 @@ void live_stats_update();
 void live_stats_force_update();
 
 /**
- * Get current live stats
+ * Get current live stats (returns pointer to internal static struct)
+ * WARNING: Not thread-safe for reading multi-byte or string fields
  */
 const live_stats_t* live_stats_get();
+
+/**
+ * Thread-safe copy of live stats
+ * Copies internal stats to provided buffer while holding mutex
+ */
+void live_stats_get_copy(live_stats_t *dest);
 
 /**
  * Set wallet address for pool stats

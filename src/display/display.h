@@ -35,11 +35,13 @@ struct display_data_s {
     uint32_t blocksFound;
     uint32_t uptimeSeconds;
     uint32_t avgLatency;        // Average pool latency in ms
+    uint32_t cpuMhz;            // CPU frequency in MHz
 
     // Pool info
     bool poolConnected;
     const char *poolName;
     double poolDifficulty;
+    int poolFailovers;          // Number of failovers (for warning color)
 
     // Pool stats (from API) - fixed char arrays
     int poolWorkersTotal;       // Total workers on pool

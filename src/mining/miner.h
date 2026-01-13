@@ -68,6 +68,11 @@ void miner_task_core1(void *param);
 void miner_set_difficulty(double poolDifficulty);
 
 /**
+ * Get current pool difficulty
+ */
+double miner_get_difficulty();
+
+/**
  * Set extra nonce from pool subscription
  */
 void miner_set_extranonce(const char *extraNonce1, int extraNonce2Size);

@@ -101,41 +101,57 @@ static void updateDisplayData(display_data_t *data) {
     data->poolName = stratum_get_pool();
 
     // Get pool difficulty from miner
-    // TODO: Get actual pool difficulty
-    data->poolDifficulty = 0.0014;  // Default
+    data->poolDifficulty = miner_get_difficulty();
 
     // Network info
     data->wifiConnected = (WiFi.status() == WL_CONNECTED);
     data->wifiRssi = data->wifiConnected ? WiFi.RSSI() : 0;
     data->ipAddress = wifi_manager_get_ip();
 
-    // Live stats
-    const live_stats_t *lstats = live_stats_get();
+    // Live stats (thread-safe copy)
+    live_stats_t lstats;
+    live_stats_get_copy(&lstats);
 
-    if (lstats->priceValid) {
-        data->btcPrice = lstats->btcPriceUsd;
+    // Overwrite pool name if proxy provides a friendly one
+    if (lstats.poolValid && strlen(lstats.poolName) > 0) {
+        data->poolName = lstats.poolName;
     }
-    if (lstats->blockValid) {
-        data->blockHeight = lstats->blockHeight;
+
+    if (lstats.poolValid) {
+        data->poolFailovers = lstats.failovers;
     }
-    if (lstats->networkValid) {
+    
+    // Also count internal backup failover as a failover event
+    if (stratum_is_backup()) {
+        data->poolFailovers++;
+        // Ensure it's at least 1 if we are on backup, even if proxy says 0
+        if (data->poolFailovers == 0) data->poolFailovers = 1;
+    }
+
+    if (lstats.priceValid) {
+        data->btcPrice = lstats.btcPriceUsd;
+    }
+    if (lstats.blockValid) {
+        data->blockHeight = lstats.blockHeight;
+    }
+    if (lstats.networkValid) {
         // Use strncpy for fixed char arrays (no heap allocation)
-        strncpy(data->networkHashrate, lstats->networkHashrate, sizeof(data->networkHashrate) - 1);
+        strncpy(data->networkHashrate, lstats.networkHashrate, sizeof(data->networkHashrate) - 1);
         data->networkHashrate[sizeof(data->networkHashrate) - 1] = '\0';
-        strncpy(data->networkDifficulty, lstats->networkDifficulty, sizeof(data->networkDifficulty) - 1);
+        strncpy(data->networkDifficulty, lstats.networkDifficulty, sizeof(data->networkDifficulty) - 1);
         data->networkDifficulty[sizeof(data->networkDifficulty) - 1] = '\0';
     }
-    if (lstats->feesValid) {
-        data->halfHourFee = lstats->halfHourFee;
+    if (lstats.feesValid) {
+        data->halfHourFee = lstats.halfHourFee;
     }
 
     // Pool stats (from API)
-    if (lstats->poolValid) {
-        data->poolWorkersTotal = lstats->poolWorkersCount;
+    if (lstats.poolValid) {
+        data->poolWorkersTotal = lstats.poolWorkersCount;
         // Use strncpy for fixed char arrays (no heap allocation)
-        strncpy(data->poolHashrate, lstats->poolTotalHashrate, sizeof(data->poolHashrate) - 1);
+        strncpy(data->poolHashrate, lstats.poolTotalHashrate, sizeof(data->poolHashrate) - 1);
         data->poolHashrate[sizeof(data->poolHashrate) - 1] = '\0';
-        strncpy(data->addressBestDiff, lstats->poolBestDifficulty, sizeof(data->addressBestDiff) - 1);
+        strncpy(data->addressBestDiff, lstats.poolBestDifficulty, sizeof(data->addressBestDiff) - 1);
         data->addressBestDiff[sizeof(data->addressBestDiff) - 1] = '\0';
         // poolWorkersAddress would need separate API call for per-address count
         data->poolWorkersAddress = 1;  // Current device counts as 1
@@ -220,6 +236,13 @@ void monitor_task(void *param) {
                     displayData.sharesAccepted + displayData.sharesRejected,
                     displayData.avgLatency,
                     displayData.bestDifficulty);
+                
+                if (displayData.poolName) {
+                    Serial.printf("[STATS] Pool: %s (%d workers) %s\n", 
+                        displayData.poolName, 
+                        displayData.poolWorkersTotal,
+                        (displayData.poolFailovers > 0) ? "[FAILOVER]" : "");
+                }
 
                 if (displayData.btcPrice > 0) {
                     Serial.printf("[STATS] BTC: $%.0f | Block: %u | Fee: %d sat/vB\n",
@@ -227,6 +250,14 @@ void monitor_task(void *param) {
                         displayData.blockHeight,
                         displayData.halfHourFee);
                 }
+
+                // DEBUG: Per-core hash contribution
+                extern volatile uint64_t s_core0Hashes;
+                extern volatile uint64_t s_core1Hashes;
+                mining_stats_t *debugStats = miner_get_stats();
+                uint64_t core1Est = debugStats->hashes - s_core0Hashes;
+                Serial.printf("[DEBUG] Core0: %llu | Core1: %llu | Total: %llu\n",
+                    s_core0Hashes, core1Est, debugStats->hashes);
 
                 // Heap monitoring - track memory usage over time
                 uint32_t freeHeap = ESP.getFreeHeap();

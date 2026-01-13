@@ -43,8 +43,11 @@ static WiFiManagerParameter* s_paramInvert = NULL;
 
 // Stats API parameters
 static WiFiManagerParameter* s_paramStatsHeader = NULL;
+static WiFiManagerParameter* s_paramStatsEnabled = NULL;
+static WiFiManagerParameter* s_paramStatsApiUrl = NULL;
 static WiFiManagerParameter* s_paramStatsProxy = NULL;
 static WiFiManagerParameter* s_paramHttpsStats = NULL;
+static char s_statsEnabledHtml[512];
 static char s_httpsStatsHtml[512];
 
 // Buffers for text inputs only
@@ -113,6 +116,13 @@ static void saveParamsCallback() {
     }
 
     // Stats API
+    if (s_paramStatsEnabled) {
+        config->statsEnabled = (atoi(s_paramStatsEnabled->getValue()) == 1);
+    }
+    if (s_paramStatsApiUrl) {
+        strncpy(config->statsApiUrl, s_paramStatsApiUrl->getValue(), 127);
+        config->statsApiUrl[127] = '\0';
+    }
     if (s_paramStatsProxy) {
         strncpy(config->statsProxyUrl, s_paramStatsProxy->getValue(), 127);
         config->statsProxyUrl[127] = '\0';
@@ -285,11 +295,26 @@ void wifi_manager_init() {
     s_paramInvert = new WiFiManagerParameter("invert", "Color Theme", config->invertColors ? "1" : "0", 2, s_invertHtml);
 
     // Stats API Settings
-    const char* statsHeader = "<br><h3>Stats API Settings</h3><div style='font-size:80%;color:#aaa'>Proxy offloads SSL from ESP32. Recommended for HTTPS.</div>";
+    const char* statsHeader = "<br><h3>Stats API Settings</h3><div style='font-size:80%;color:#aaa'>Priority: Custom API &gt; Proxy &gt; Direct HTTPS</div>";
     s_paramStatsHeader = new WiFiManagerParameter(statsHeader);
 
-    s_paramStatsProxy = new WiFiManagerParameter("stats_proxy", "Proxy URL (http://host:port)", config->statsProxyUrl, 128);
+    // Stats enabled dropdown
+    strcpy(s_statsEnabledHtml, "<br><select name='stats_en'>");
+    strcat(s_statsEnabledHtml, "<option value='1'");
+    if(config->statsEnabled) strcat(s_statsEnabledHtml, " selected");
+    strcat(s_statsEnabledHtml, ">Enabled</option>");
+    strcat(s_statsEnabledHtml, "<option value='0'");
+    if(!config->statsEnabled) strcat(s_statsEnabledHtml, " selected");
+    strcat(s_statsEnabledHtml, ">Disabled</option></select>");
+    s_paramStatsEnabled = new WiFiManagerParameter("stats_en", "Live Stats", config->statsEnabled ? "1" : "0", 2, s_statsEnabledHtml);
 
+    // Custom stats API URL (for stratum proxy /stats endpoint)
+    s_paramStatsApiUrl = new WiFiManagerParameter("stats_api", "Custom API URL (http://host:port/stats)", config->statsApiUrl, 128);
+
+    // HTTP proxy URL
+    s_paramStatsProxy = new WiFiManagerParameter("stats_proxy", "HTTP Proxy (http://host:port)", config->statsProxyUrl, 128);
+
+    // Direct HTTPS dropdown
     strcpy(s_httpsStatsHtml, "<br><select name='https_stats'>");
     strcat(s_httpsStatsHtml, "<option value='0'");
     if(!config->enableHttpsStats) strcat(s_httpsStatsHtml, " selected");
@@ -323,13 +348,13 @@ void wifi_manager_init() {
         "button:hover{background:#ff8c00;}"
         "div{padding:5px 0;}"
         // Hide redundant text inputs for dropdown fields (dropdowns handle these)
-        "input[name='bright'],input[name='diff'],input[name='rotation'],input[name='invert'],input[name='https_stats'],input[name='tz']{display:none;}"
+        "input[name='bright'],input[name='diff'],input[name='rotation'],input[name='invert'],input[name='https_stats'],input[name='tz'],input[name='stats_en']{display:none;}"
         "</style>"
         "<script>"
         // Sync dropdown values to hidden inputs on load and change
         "function syncDropdowns(){"
         "console.log('[SYNC] Starting dropdown sync...');"
-        "var dd=['bright','diff','rotation','tz','invert','https_stats'];"
+        "var dd=['bright','diff','rotation','tz','invert','https_stats','stats_en'];"
         "dd.forEach(function(n){"
         "var sel=document.querySelector('select[name=\"'+n+'\"]');"
         "var inp=document.querySelector('input[name=\"'+n+'\"]');"
@@ -350,7 +375,7 @@ void wifi_manager_init() {
         "}"
         // Log all values before form submit
         "function logFormValues(){"
-        "var dd=['bright','diff','rotation','tz','invert','https_stats'];"
+        "var dd=['bright','diff','rotation','tz','invert','https_stats','stats_en'];"
         "console.log('[SUBMIT] Form values before submit:');"
         "dd.forEach(function(n){"
         "var sel=document.querySelector('select[name=\"'+n+'\"]');"
@@ -391,6 +416,8 @@ void wifi_manager_init() {
     s_wm.addParameter(s_paramInvert);
 
     s_wm.addParameter(s_paramStatsHeader);
+    s_wm.addParameter(s_paramStatsEnabled);
+    s_wm.addParameter(s_paramStatsApiUrl);
     s_wm.addParameter(s_paramStatsProxy);
     s_wm.addParameter(s_paramHttpsStats);
 

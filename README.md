@@ -227,6 +227,10 @@ Create a `config.json` file on a FAT32-formatted microSD card:
 | `backup_pool_url` | No | - | Failover pool hostname |
 | `backup_pool_port` | No | - | Failover pool port |
 | `backup_wallet` | No | - | Wallet for backup pool |
+| `stats_enabled` | No | `true` | Enable/disable live stats fetching |
+| `stats_api_url` | No | - | Custom stats API endpoint (HTTP) |
+| `stats_proxy_url` | No | - | HTTP proxy for HTTPS APIs |
+| `enable_https_stats` | No | `false` | Direct HTTPS (unstable) |
 
 ### 2. WiFi Access Point Portal
 
@@ -261,20 +265,41 @@ SparkMiner automatically saves mining statistics to ensure your lifetime totals 
 
 ---
 
-## HTTPS Stats Proxy (Advanced)
+## Live Stats Configuration
 
-SparkMiner displays live Bitcoin price and network stats. These APIs use HTTPS, which is memory-intensive for the ESP32 and can cause stability issues or mining interruptions.
+SparkMiner displays live Bitcoin price, network hashrate, difficulty, and fee estimates. These external APIs use HTTPS, which is memory-intensive for the ESP32 and can impact mining hashrate.
 
-To fix this, SparkMiner supports an HTTP-to-HTTPS proxy that offloads SSL/TLS to an external server.
+SparkMiner supports three modes for fetching external stats (in priority order):
 
-### Why use a proxy?
-- **Stability:** Offloads heavy SSL/TLS encryption to an external server
-- **Memory:** Saves ~30KB of RAM on the ESP32 for mining
-- **Performance:** Prevents mining interruptions during stats updates
+### Priority 1: Custom Stats API (Recommended)
 
-### Option 1: Self-Hosted Proxy (Recommended)
+If you're running a stratum proxy (e.g., for solo mining via VPN), you can extend it to serve aggregated stats via HTTP. This is the most efficient option - single HTTP call, zero SSL overhead.
 
-Run the proxy on any server, Raspberry Pi, or always-on computer on your network:
+```json
+{
+  "stats_enabled": true,
+  "stats_api_url": "http://192.168.1.100:3334/stats"
+}
+```
+
+**Expected API response format:**
+```json
+{
+  "btc_price_usd": 94100,
+  "block_height": 932170,
+  "network_hashrate": "1025.20 EH/s",
+  "network_difficulty": "146.47T",
+  "fee_half_hour": 1,
+  "fee_fastest": 1,
+  "workers": 4,
+  "pool_name": "Solo CKPool",
+  "failovers": 0
+}
+```
+
+### Priority 2: HTTP Proxy (SSL Bumping)
+
+Run an HTTP-to-HTTPS proxy that handles SSL/TLS offloading:
 
 ```bash
 # Using Node.js (save scripts/cloudflare_stats_proxy.js as proxy.js)
@@ -287,38 +312,42 @@ wrangler dev proxy.js --port 8080
 # - mitmproxy
 ```
 
-Configure SparkMiner with your local proxy:
-
 ```json
 {
-  "ssid": "YourWiFi",
-  "password": "YourPassword",
-  "wallet": "bc1q...",
+  "stats_enabled": true,
   "stats_proxy_url": "http://192.168.1.100:8080"
 }
 ```
 
-### Option 2: Cloudflare Worker (Requires Custom Domain)
+### Priority 3: Direct HTTPS (Not Recommended)
 
-The `workers.dev` domain requires HTTPS, so you need a custom domain with HTTP enabled:
-
-1. Deploy the worker from [`scripts/cloudflare_stats_proxy.js`](scripts/cloudflare_stats_proxy.js)
-2. Add a custom domain to your worker in Cloudflare dashboard
-3. In **SSL/TLS > Edge Certificates**, disable "Always Use HTTPS"
-4. Configure SparkMiner:
+Fetch HTTPS APIs directly on the ESP32. This uses ~30KB extra RAM and may cause mining interruptions or watchdog resets.
 
 ```json
 {
-  "stats_proxy_url": "http://stats.yourdomain.com"
+  "stats_enabled": true,
+  "enable_https_stats": true
 }
 ```
 
-### Configuration Options
+### Disable Stats Entirely
 
-| Field | Description |
-|-------|-------------|
-| `stats_proxy_url` | HTTP proxy URL (e.g., `http://192.168.1.100:8080`) |
-| `enable_https_stats` | Set to `true` to fetch HTTPS directly (uses more memory, less stable) |
+If you don't need live stats and want maximum stability:
+
+```json
+{
+  "stats_enabled": false
+}
+```
+
+### Configuration Reference
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `stats_enabled` | `true` | Master switch for live stats |
+| `stats_api_url` | - | Custom HTTP endpoint (highest priority) |
+| `stats_proxy_url` | - | HTTP proxy for HTTPS APIs |
+| `enable_https_stats` | `false` | Direct HTTPS fetching (unstable) |
 
 ---
 
