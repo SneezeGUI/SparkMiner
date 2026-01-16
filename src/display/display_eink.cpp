@@ -148,26 +148,21 @@ static String formatDiffCompact(double diff) {
 // Screen Drawing Functions
 // ============================================================
 
-void printFullScreen() {
+void printScreen() {
     htDisplay.update(BLACK_BUFFER);
-    htDisplay.setFull();
     htDisplay.display();
-}
-
-void printPartialScreen() {
-    htDisplay.update(BLACK_BUFFER);
-    htDisplay.setPartial();
-    htDisplay.display();
+    htDisplay.updateData(0x10); // load as old image
 }
 
 void clearScreen() {
     htDisplay.clear();
     htDisplay.update(BLACK_BUFFER);
+    htDisplay.updateData(0x10); // load as old image
 }
 
 void clearFullScreen() {
     clearScreen();
-    printFullScreen();
+    htDisplay.display();
 }
 
 static void drawMainScreen(const display_data_t *data) {
@@ -220,7 +215,7 @@ static void drawMainScreen(const display_data_t *data) {
     w = htDisplay.getStringWidth(best.c_str());
     htDisplay.drawString((EINK_WIDTH - w), (EINK_HEIGHT - s_fontHeight), best.c_str());
     
-    printPartialScreen();
+    printScreen();
 }
 
 static void drawStatsScreen(const display_data_t *data) {
@@ -254,7 +249,7 @@ static void drawStatsScreen(const display_data_t *data) {
     }
     htDisplay.drawString(0, ((s_fontHeight * 5) + 8), rssiLine.c_str());
 
-    printPartialScreen();
+    printScreen();
 }
 
 // ============================================================
@@ -290,6 +285,8 @@ void eink_display_init(uint8_t rotation, uint8_t brightness) {
     // Show boot screen
     eink_display_show_boot();
 
+    htDisplay.setPartial();
+
     Serial.println("[EINK] Display initialized");
 }
 
@@ -319,7 +316,7 @@ void eink_display_next_screen() {
 }
 
 void eink_display_show_ap_config(const char *ssid, const char *password, const char *ip) {
-    clearFullScreen();
+    clearScreen();
 
     // Center WiFi AP stats
     htDisplay.drawString(10, 2, "WiFi Setup");
@@ -331,7 +328,7 @@ void eink_display_show_ap_config(const char *ssid, const char *password, const c
     String ip_text = "IP: " + String(ip);
     htDisplay.drawString(0, (6 + (4 * s_fontHeight)), ip_text.c_str());
 
-    printPartialScreen();
+    printScreen();
 }
 
 void eink_display_show_boot() {
@@ -353,7 +350,7 @@ void eink_display_show_boot() {
     w = htDisplay.getStringWidth(version);
     htDisplay.drawString(((EINK_WIDTH - w) / 2), (y + (2 * s_fontHeight)), version);
 
-    printPartialScreen();
+    printScreen();
 }
 
 void eink_display_show_reset_countdown(int seconds) {
@@ -370,7 +367,7 @@ void eink_display_show_reset_countdown(int seconds) {
     w = htDisplay.getStringWidth(countdown.c_str());
     htDisplay.drawString(((EINK_WIDTH - w) / 2), ((EINK_HEIGHT - s_fontHeight) / 2), countdown.c_str());
 
-    printPartialScreen();
+    printScreen();
 }
 
 void eink_display_show_reset_complete() {
@@ -382,7 +379,7 @@ void eink_display_show_reset_complete() {
     uint16_t w = htDisplay.getStringWidth(text);
     htDisplay.drawString(((EINK_WIDTH - w) / 2), ((EINK_HEIGHT - s_fontHeight) / 2), text);
     
-    printPartialScreen();
+    printScreen();
 }
 
 void eink_display_redraw() {

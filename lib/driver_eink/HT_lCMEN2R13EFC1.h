@@ -74,13 +74,27 @@ public:
 
 	void setPartial()
 	{
+		sendCommand(0x92); // partial out
+
+		WRITE_LUT_PARTIAL();
+
+		sendCommand(0xE0);
+		sendData(0X02);
+		sendCommand(0xE5); // Refresh Speed or something
+		sendData(0x75);
+	}
+
+	void setFast()
+	{
+		// will mess up partial mode - don't know how to revert it
 		sendCommand(0x00);
 		sendData(0xF7);
-		WRITE_LUT_RED();
+		WRITE_LUT_PARTIAL();
 	}
 
 	void setFull()
 	{
+		sendCommand(0x92); // partial out
 		sendCommand(0x00);
 		sendData(0xD7);
 	}
@@ -106,9 +120,11 @@ public:
 
 	void setInverted()
 	{
-		WRITE_LUT_RED();
+		WRITE_LUT_PARTIAL();
+		// sendCommand(0x50);
+		// sendData(0x07);
 		sendCommand(0x50);
-		sendData(0x07);
+		sendData(0x97);
 	}
 
 	void setNormal()
@@ -234,11 +250,10 @@ public:
 
 	void stop()
 	{
-
 		end();
 	}
 
-	void WRITE_LUT_RED()
+	void WRITE_LUT_PARTIAL()
 	{
 		unsigned int count;
 
@@ -276,6 +291,7 @@ public:
 			sendData(LUT_BB[count]);
 		}
 	}
+
 	void dis_image()
 	{
 		unsigned int row, col;
@@ -311,7 +327,7 @@ public:
 
 		sendCommand(0x92); // partial out
 
-		WRITE_LUT_RED(); // 波形
+		WRITE_LUT_PARTIAL(); // 波形
 		sendCommand(0x50);
 		sendData(0x07); //  border  CleaeScreep_LUT()
 
@@ -428,7 +444,7 @@ public:
 		}
 
 		sendCommand(0x92); // partial out
-		WRITE_LUT_RED();   //
+		WRITE_LUT_PARTIAL();   //
 		// sendCommand(0x50);
 		// sendData(0x07); //  border  CleaeScreep_LUT()
 		sendCommand(0xE0);
@@ -484,7 +500,7 @@ public:
 		}
 		sendCommand(0x92); // partial out
 
-		WRITE_LUT_RED();
+		WRITE_LUT_PARTIAL();
 		// sendCommand(0x50);
 		// sendData(0x07); //  border  CleaeScreep_LUT()
 
