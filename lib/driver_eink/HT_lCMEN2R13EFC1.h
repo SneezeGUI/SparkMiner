@@ -4,7 +4,6 @@
 #include <HT_Display.h>
 #include <SPI.h>
 #include <HT_lCMEN2R13EFC1_LUT.h>
-#include "HT_st7735_fonts.h"
 SPIClass fSPI(HSPI);
 
 
@@ -23,6 +22,7 @@ private:
 	int8_t _busy;
 	uint8_t _buf[4096];
 	SPISettings _spiSettings;
+	bool inverted;
 
 public:
 	uint8_t _width = 250;
@@ -40,6 +40,7 @@ public:
 		this->_miso = _miso;
 		this->_busy = _busy;
 		this->displayType = E_INK;
+		this->inverted = false;
 	}
 
 	bool connect()
@@ -94,6 +95,7 @@ public:
 
 	void setFull()
 	{
+		// may also mess up partial mode
 		sendCommand(0x92); // partial out
 		sendCommand(0x00);
 		sendData(0xD7);
@@ -118,24 +120,13 @@ public:
 		WaitUntilIdle();
 	}
 
-	void setInverted()
+	void setInverted(bool inverted)
 	{
-		WRITE_LUT_PARTIAL();
-		// sendCommand(0x50);
-		// sendData(0x07);
-		sendCommand(0x50);
-		sendData(0x97);
-	}
-
-	void setNormal()
-	{
-		sendCommand(0x50);
-		sendData(0x97);
+		this->inverted = inverted;
 	}
 
 	void updateData(uint8_t addr)
 	{
-
 		if (rotate_angle == ANGLE_0_DEGREE || rotate_angle == ANGLE_180_DEGREE)
 		{
 			int xmax = this->width();
@@ -149,11 +140,17 @@ public:
 				{
 					for (int y = 0; y < ymax; y++)
 					{
-						// if(addr==0x24)
-						if (addr == 0x13)
-							fSPI.transfer(~buffer[x + y * xmax]);
+						if (0x13 == addr)
+						{
+							if (true == inverted)
+								fSPI.transfer(buffer[x + y * xmax]);
+							else
+								fSPI.transfer(~buffer[x + y * xmax]);
+						}
 						else
+						{
 							fSPI.transfer(buffer[x + y * xmax]);
+						}
 					}
 				}
 			}
@@ -164,14 +161,18 @@ public:
 				{
 					for (int y = (ymax - 1); y >= 0; y--)
 					{
-						// if(addr==0x24)
-						if (addr == 0x13)
-
+						if (0x13 == addr)
 						{
 							if (y == 0)
-								fSPI.transfer(~(buffer[x + y * xmax] << 6));
+								if (true == inverted)
+									fSPI.transfer((buffer[x + y * xmax] << 6));
+								else
+									fSPI.transfer(~(buffer[x + y * xmax] << 6));
 							else
-								fSPI.transfer(~((buffer[x + y * xmax] << 6) | (buffer[x + (y - 1) * xmax] >> 2)));
+								if (true == inverted)
+									fSPI.transfer(((buffer[x + y * xmax] << 6) | (buffer[x + (y - 1) * xmax] >> 2)));
+								else
+									fSPI.transfer(~((buffer[x + y * xmax] << 6) | (buffer[x + (y - 1) * xmax] >> 2)));
 						}
 						else
 						{
@@ -210,13 +211,18 @@ public:
 				{
 					for (int y = (ymax - 1); y >= 0; y--)
 					{
-						// if(addr==0x24)
-						if (addr == 0x10)
+						if (0x10 == addr)
 						{
 							if (y == 0)
-								fSPI.transfer(~(buffer_rotate[x + y * xmax] << 6));
+								if (true == inverted)
+									fSPI.transfer((buffer_rotate[x + y * xmax] << 6));
+								else
+									fSPI.transfer(~(buffer_rotate[x + y * xmax] << 6));
 							else
-								fSPI.transfer(~((buffer_rotate[x + y * xmax] << 6) | (buffer_rotate[x + (y - 1) * xmax] >> 2)));
+								if (true == inverted)
+									fSPI.transfer(((buffer_rotate[x + y * xmax] << 6) | (buffer_rotate[x + (y - 1) * xmax] >> 2)));
+								else
+									fSPI.transfer(~((buffer_rotate[x + y * xmax] << 6) | (buffer_rotate[x + (y - 1) * xmax] >> 2)));
 						}
 						else
 						{
@@ -225,7 +231,7 @@ public:
 							else
 								fSPI.transfer((buffer_rotate[x + y * xmax] << 6) | (buffer_rotate[x + (y - 1) * xmax] >> 2));
 						}
-					}
+					}	
 				}
 			}
 			else
@@ -235,11 +241,17 @@ public:
 				{
 					for (int y = 0; y < ymax; y++)
 					{
-						// if(addr==0x24)
-						if (addr == 0x13)
-							fSPI.transfer(~buffer_rotate[x + y * xmax]);
+						if (0x13 == addr)
+						{
+							if (true == inverted)
+								fSPI.transfer(buffer_rotate[x + y * xmax]);
+							else
+								fSPI.transfer(~buffer_rotate[x + y * xmax]);
+						}
 						else
+						{
 							fSPI.transfer(buffer_rotate[x + y * xmax]);
+						}
 					}
 				}
 			}
@@ -292,57 +304,7 @@ public:
 		}
 	}
 
-	void dis_image()
-	{
-		unsigned int row, col;
-		unsigned int pcnt;
-		unsigned char Byte1, Byte2, Byte3;
-
-		/***************************************************Partial_Refresh image****************************************************/
-
-		sendCommand(0x91); // DTM1 Write
-		WaitUntilIdle();
-
-		sendCommand(0x90);
-		WaitUntilIdle();
-		sendData(0);   //
-		sendData(128); // H End 48/8=6
-		sendData(0);
-		sendData(250); // V End 32
-
-		sendData(0x01);
-
-		sendCommand(0x13); // DTM1 Write
-		WaitUntilIdle();
-		pcnt = 0;
-		for (col = 0; col < 250; col++)
-		{
-			for (row = 0; row < 16; row++)
-			{
-				sendData(0xff);
-
-				pcnt++;
-			}
-		}
-
-		sendCommand(0x92); // partial out
-
-		WRITE_LUT_PARTIAL(); // 波形
-		sendCommand(0x50);
-		sendData(0x07); //  border  CleaeScreep_LUT()
-
-		sendCommand(0xE0);
-		sendData(0X02);
-		sendCommand(0xE5);
-		sendData(0x75);
-
-		sendCommand(0x04);
-		WaitUntilIdle();
-		sendCommand(0x12);
-		WaitUntilIdle();
-		sendCommand(0x02);
-	}
-
+	// keeping this for refferences
 	void INIT_JD79656_mcu()
 	{ // FITI cmd.
 		sendCommand(0x4D);
@@ -408,113 +370,6 @@ public:
 		sendCommand(0xA8);
 		sendData(0x3D);
 	}
-	void setwin(uint8_t x, uint8_t y, uint8_t w, uint8_t h)
-	{
-		sendData(y);		 //
-		sendData(y + h - 1); // H End 48/8=6
-		sendData(x);
-		sendData(x + w - 1); // V End 32
-	}
-	void dis_img_Partial_Refresh(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const unsigned char *img)
-	{
-		unsigned int row, col;
-		unsigned int pcnt;
-		unsigned char Byte1, Byte2, Byte3;
-		Byte1 = h * 8;
-		Byte2 = y;
-		/***************************************************Partial_Refresh image****************************************************/
-
-		sendCommand(0x91); // DTM1 Write
-		WaitUntilIdle();
-		sendCommand(0x90);
-		WaitUntilIdle();
-		setwin(x, Byte2, w, Byte1);
-		sendData(0x00);
-		sendCommand(0x13); // DTM1 Write
-		WaitUntilIdle();
-		// uint8_t len =sizeof(img)/sizeof(img[0])
-		pcnt = 0;
-		for (col = 0; col < w; col++)
-		{
-			for (row = 0; row < h; row++)
-			{
-				sendData(img[pcnt]);
-				pcnt++;
-			}
-		}
-
-		sendCommand(0x92); // partial out
-		WRITE_LUT_PARTIAL();   //
-		// sendCommand(0x50);
-		// sendData(0x07); //  border  CleaeScreep_LUT()
-		sendCommand(0xE0);
-		sendData(0X02);
-		sendCommand(0xE5);
-		sendData(0x75);
-
-		sendCommand(0x04);
-		WaitUntilIdle();
-		sendCommand(0x12);
-		WaitUntilIdle();
-		sendCommand(0x02);
-	}
-	void dis_str_Partial_Refresh(int16_t x, int16_t y, uint8_t ch, FontDef font)
-	{
-		unsigned int row, col;
-		unsigned int pcnt;
-		unsigned char Byte1, Byte2, Byte3;
-		// uint8_t textHeight = pgm_read_byte(fontData + HEIGHT_POS);
-		// uint16_t textWidth = pgm_read_byte(fontData + FIRST_CHAR_POS);
-		Byte1 = font.height;
-		Byte2 = (y / 8) * 8 + 1;
-
-		/***************************************************Partial_Refresh image****************************************************/
-
-		sendCommand(0x91); // DTM1 Write
-		WaitUntilIdle();
-
-		sendCommand(0x90);
-		WaitUntilIdle();
-		// setwin(x, Byte2, w, Byte1);
-		setwin(x, y, font.width, Byte1);
-		sendData(0x01);
-		sendCommand(0x13); // DTM1 Write
-		WaitUntilIdle();
-
-		uint32_t i, b, j;
-
-		for (i = 0; i < font.height; i++)
-		{
-			b = font.data[(ch - 32) * font.height + i];
-			for (j = 0; j < font.width; j++)
-			{
-				if ((b << j) & 0x8000)
-				{
-					sendData(0x00);
-				}
-				else
-				{
-					sendData(0xff);
-				}
-			}
-		}
-		sendCommand(0x92); // partial out
-
-		WRITE_LUT_PARTIAL();
-		// sendCommand(0x50);
-		// sendData(0x07); //  border  CleaeScreep_LUT()
-
-		sendCommand(0xE0);
-		sendData(0X02);
-		sendCommand(0xE5);
-		sendData(0x75);
-
-		sendCommand(0x04);
-		WaitUntilIdle();
-		sendCommand(0x12);
-		WaitUntilIdle();
-		sendCommand(0x02);
-	}
 
 private:
 	int getBufferOffset(void)
@@ -527,10 +382,10 @@ private:
 		while (!digitalRead(_busy))
 		{ // LOW: idle, HIGH: busy
 			delay(1);
-
 		}
-		delay(10);
+		delay(1);
 	}
+
 	inline void sendCommand(uint8_t com) __attribute__((always_inline))
 	{
 		digitalWrite(_dc, LOW);
@@ -541,6 +396,7 @@ private:
 		digitalWrite(_cs, HIGH);
 		digitalWrite(_dc, HIGH);
 	}
+
 	void sendData(unsigned char data)
 	{
 		digitalWrite(this->_cs, LOW);
@@ -550,7 +406,6 @@ private:
 
 	void sendInitCommands(void)
 	{
-
 		WaitUntilIdle();
 		sendCommand(0x12); // soft reset
 		WaitUntilIdle();
@@ -609,10 +464,11 @@ private:
 		sendData(0x00);
 		WaitUntilIdle();
 	}
+
 	void sendScreenRotateCommand()
 	{
+		// not implemented
 	}
-	// xx Write_data function xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 };
 
 #endif

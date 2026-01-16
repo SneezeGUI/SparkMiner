@@ -413,13 +413,7 @@ void eink_display_set_rotation(uint8_t rotation) {
 }
 
 void eink_display_set_inverted(bool inverted) {
-
-    if(true == inverted) {
-        htDisplay.setInverted();
-    } else {
-        htDisplay.setNormal();
-    }
-
+    htDisplay.setInverted(inverted);
     s_inverted = inverted;
 
     s_needsRedraw = true;
