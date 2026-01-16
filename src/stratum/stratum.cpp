@@ -549,6 +549,21 @@ void stratum_task(void *param) {
 
             usingBackup = false;
 
+            #if defined(HARDCODE_POOLS)
+            /* Overwrite Primary Pool */
+            safeStrCpy(s_primaryPool.url, h_primPool, sizeof(h_primPool));
+            s_primaryPool.port = h_primPort;
+            safeStrCpy(s_primaryPool.wallet, h_primWallet, sizeof(h_primWallet));
+            safeStrCpy(s_primaryPool.workerName, h_primWorker, sizeof(h_primWorker));
+
+            /* Overwrite Backup Pool */
+            safeStrCpy(s_backupPool.url, h_bkpPool, sizeof(h_bkpPool));
+            s_backupPool.port = h_bkpPort;
+            safeStrCpy(s_backupPool.wallet, h_bkpWallet, sizeof(h_bkpWallet));
+            safeStrCpy(s_backupPool.workerName, h_bkpWorker, sizeof(h_bkpWorker));
+            s_hasBackupPool = true;
+            #endif
+
             Serial.printf("[STRATUM] Connecting to %s:%d...\n",
                 s_primaryPool.url, s_primaryPool.port);
 

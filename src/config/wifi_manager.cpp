@@ -126,7 +126,7 @@ static void saveParamsCallback() {
         Serial.println("[WIFI] Configuration saved successfully");
 
         // Apply display settings immediately
-        #if USE_DISPLAY || USE_OLED_DISPLAY
+        #if (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
             display_set_brightness(config->brightness);
             display_set_rotation(config->rotation);
             display_set_inverted(config->invertColors);
@@ -147,7 +147,7 @@ static void configModeCallback(WiFiManager *wm) {
     Serial.printf("[WIFI] IP: %s\n", WiFi.softAPIP().toString().c_str());
     s_portalRunning = true;
 
-    #if USE_DISPLAY
+    #if (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
         display_show_ap_config(
             wm->getConfigPortalSSID().c_str(),
             AP_PASSWORD,

@@ -202,7 +202,7 @@ void monitor_task(void *param) {
         if (now - s_lastDisplayUpdate >= DISPLAY_UPDATE_MS) {
             updateDisplayData(&displayData);
 
-            #if USE_DISPLAY
+            #if (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
                 display_update(&displayData);
 
                 // Check for touch input
