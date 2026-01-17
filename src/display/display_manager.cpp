@@ -47,6 +47,11 @@ DisplayDriver* display_get_driver(void) {
 // These are implemented in display_oled.cpp (U8g2 OLED driver)
 // OLED driver provides its own display_* function implementations.
 
+#elif USE_EINK_DISPLAY
+
+// These are implemented in display_eink.cpp (Heltec E-INK driver)
+// E-INK driver provides its own display_* function implementations.
+
 #elif USE_LED_STATUS
 
 // LED-only builds: implement stubs that work with LED status
