@@ -232,7 +232,7 @@ Create a `config.json` file on a FAT32-formatted microSD card:
 
 If no SD card config is found, SparkMiner creates a WiFi access point:
 
-1. **Connect** to WiFi network: `SparkMiner-XXXX` (password shown on display)
+1. **Connect** to WiFi network: `SparkMiner-XXXX` (password: minebitcoin)
 2. **Open browser** to `http://192.168.4.1`
 3. You will see the **new dark-themed portal** with full configuration options:
     - Primary & Backup Pool settings
