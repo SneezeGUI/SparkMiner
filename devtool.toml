@@ -130,6 +130,24 @@ needs_boot_mode = true
 port_changes_on_reset = true
 group = "OLED Display"
 
+[boards.wireless-paper]
+name = "Heltec Wireless Paper"
+env = "wireless-paper"
+chip = "esp32s3"
+description = "ESP32-S3 with 2.13\" E-Ink display (~278 KH/s)"
+needs_boot_mode = true
+port_changes_on_reset = true
+group = "E-Ink Display"
+
+[boards.wireless-paper-headless]
+name = "Heltec Wireless Paper (Headless)"
+env = "wireless-paper-headless"
+chip = "esp32s3"
+description = "ESP32-S3 headless variant for Wireless Paper board"
+needs_boot_mode = true
+port_changes_on_reset = true
+group = "Headless (No Display)"
+
 # ============================================================
 # Release Settings
 # ============================================================

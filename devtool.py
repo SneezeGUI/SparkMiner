@@ -301,6 +301,60 @@ class DevTool:
                 return version_file.read_text().strip()
         return "dev"
 
+    def get_optimal_workers(self) -> int:
+        """
+        Determine optimal number of parallel build workers based on host hardware.
+
+        Strategy:
+        - Get CPU core count (physical or logical)
+        - Get available memory
+        - Cap workers to avoid overloading system
+        - Leave headroom for system responsiveness
+        """
+        try:
+            # Try psutil first (more accurate)
+            import psutil
+            cpu_count = psutil.cpu_count(logical=True)
+            physical_cores = psutil.cpu_count(logical=False)
+            available_mem_gb = psutil.virtual_memory().available / (1024**3)
+        except ImportError:
+            # Fallback to os module
+            cpu_count = os.cpu_count() or 4
+            physical_cores = cpu_count // 2  # Assume hyperthreading
+            # Estimate available memory based on core count (assume ~4GB per core typical)
+            available_mem_gb = max(8, physical_cores * 2)
+
+        # PlatformIO builds use ~2-4GB RAM per job
+        # and are CPU-intensive during compilation
+        mem_based_limit = max(1, int(available_mem_gb / 3))
+
+        # Use physical cores as base, leave 1-2 for system
+        if physical_cores <= 2:
+            # Weak CPU (dual-core): single-threaded
+            cpu_based_limit = 1
+        elif physical_cores <= 4:
+            # Mid-range (quad-core): 2-3 workers
+            cpu_based_limit = physical_cores - 1
+        else:
+            # Beefy CPU (6+ cores): scale up but cap at 8
+            cpu_based_limit = min(physical_cores - 2, 8)
+
+        optimal = min(cpu_based_limit, mem_based_limit)
+
+        return max(1, optimal)  # At least 1 worker
+
+    def get_system_info(self) -> str:
+        """Get brief system info string for build output"""
+        try:
+            import psutil
+            cores = psutil.cpu_count(logical=False)
+            threads = psutil.cpu_count(logical=True)
+            mem_gb = psutil.virtual_memory().total / (1024**3)
+            return f"{cores}C/{threads}T, {mem_gb:.0f}GB RAM"
+        except ImportError:
+            cores = os.cpu_count() or 4
+            return f"{cores} threads"
+
     def is_git_dirty(self) -> bool:
         """Check for uncommitted changes"""
         result = self.run_cmd(["git", "status", "--porcelain"], capture=True)
@@ -702,6 +756,11 @@ class DevTool:
 
         print(f"  Boards:  {len(boards)}")
         print(f"  Mode:    {'Parallel' if parallel else 'Sequential'}")
+        if parallel:
+            optimal_workers = self.get_optimal_workers()
+            actual_workers = min(optimal_workers, len(boards))
+            print(f"  System:  {self.get_system_info()}")
+            print(f"  Workers: {actual_workers} (optimal: {optimal_workers})")
         print(f"  Output:  {self.config.firmware_dir}/{version}/")
         print(f"{c('=' * 60, Colors.CYAN)}")
 
@@ -709,7 +768,7 @@ class DevTool:
         start_time = time.time()
 
         if parallel:
-            with ThreadPoolExecutor(max_workers=min(4, len(boards))) as executor:
+            with ThreadPoolExecutor(max_workers=actual_workers) as executor:
                 futures = {executor.submit(self.build, b, False): b for b in boards}
                 for future in as_completed(futures):
                     board = futures[future]
