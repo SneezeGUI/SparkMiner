@@ -1,4 +1,4 @@
-# SparkMiner v2.9.1
+# SparkMiner v2.9.2
 
 **High-performance Bitcoin solo miner for ESP32, ESP32-S3 & ESP32-C3**
 
@@ -286,14 +286,20 @@ If you're running a stratum proxy (e.g., for solo mining via VPN), you can exten
 ```json
 {
   "btc_price_usd": 94100,
-  "block_height": 932170,
-  "network_hashrate": "1025.20 EH/s",
-  "network_difficulty": "146.47T",
-  "fee_half_hour": 1,
-  "fee_fastest": 1,
+  "block_height": 880000,
+  "network_hashrate": "600.00 EH/s",
+  "network_difficulty": "90.00T",
+  "fee_half_hour": 5,
+  "fee_fastest": 10,
   "workers": 4,
-  "pool_name": "Solo CKPool",
-  "failovers": 0
+  "pool_name": "My Pool",
+  "failovers": 0,
+  "pool_hashrate": "50.00 PH/s",
+  "worker_hashrate": "1.50 MH/s",
+  "address_best_diff": "100.00K",
+  "difficulty_progress": 45.0,
+  "difficulty_change": -2.5,
+  "difficulty_retarget_blocks": 1100
 }
 ```
 
@@ -414,20 +420,28 @@ SparkMiner has 3 display screens. Press BOOT to cycle:
 
 ```
 ┌─────────────────────────────────┐
-│ SparkMiner v2.6     45C  [●][●] │
+│ SparkMiner v2.9     45C  [●][●] │
 ├─────────────────────────────────┤
 │  687.25 KH/s          Shares    │
 │                        12/12    │
 │ Best     Hashes    Uptime       │
-│ 0.0673   47.5M     2h 15m       │
-│ Ping     32-bit    Blocks       │
-│ 326ms    3         0            │
+│ 100.0K   47.5M     2h 15m       │
+│ Retarget Blocks    Workers      │
+│ 45% -2%  0         1.5 MH/s     │
 │                                 │
-│ Pool: public-pool.io    12miners│
-│ Diff: 0.0032            You: 1  │
-│ IP: 192.168.1.109    Ping: 326ms│
+│ Pool: public-pool.io            │
+│ Diff: 1000.00      Jobs: 47     │
+│ Pool: 50 PH/s      IP: 192.168.x│
 └─────────────────────────────────┘
 ```
+
+**Stats Grid:**
+- **Best**: Best difficulty achieved (lifetime)
+- **Hashes**: Total hashes computed
+- **Uptime**: Session uptime
+- **Retarget**: Difficulty adjustment progress + expected change %
+- **Blocks**: Solo blocks found
+- **Workers**: Your combined worker hashrate from pool
 
 ### Screen 2: Network Stats
 
@@ -468,13 +482,14 @@ SparkMiner uses both ESP32 cores efficiently:
 - **Core 1 (High Priority, 19):** Pipelined hardware SHA-256 mining using direct register access and assembly optimization
 - **Core 0 (Low Priority, 1):** WiFi, Stratum protocol, display updates, and software SHA-256 backup mining
 
-**v2.9.0 Features & Architecture:**
+**v2.9.2 Features & Architecture:**
+- **Stratum Proxy Stats:** Pool hashrate, worker hashrate, difficulty adjustment via proxy.
+- **Enhanced Display:** Workers panel shows combined hashrate, Retarget shows difficulty progress.
 - **Persistent Stats:** Lifetime mining history preserved via NVS and SD card backups.
-- **Enhanced Stability:** Struct alignment fixes and robust error handling.
 - **Display Support:** OLED (SSD1306) and LCD (ILI9341/ST7789) via abstraction layer.
-- **New Boards:** ESP32-C3, LILYGO T-Display, and Headless with LED status.
+- **Multi-Board Support:** ESP32-C3, ESP32-S3, and Headless with LED status.
 - **Optimized Core Usage:**
-  - Core 1: Pipelined assembly SHA-256 (v2) with unrolled loops.
+  - Core 1: Pipelined assembly SHA-256 (v3) with unrolled loops.
   - Core 0: Network stack, Stratum, and UI management.
 
 ---

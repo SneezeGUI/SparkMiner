@@ -140,6 +140,10 @@ static void updateDisplayData(display_data_t *data) {
         data->networkHashrate[sizeof(data->networkHashrate) - 1] = '\0';
         strncpy(data->networkDifficulty, lstats.networkDifficulty, sizeof(data->networkDifficulty) - 1);
         data->networkDifficulty[sizeof(data->networkDifficulty) - 1] = '\0';
+        
+        data->difficultyProgress = lstats.difficultyProgress;
+        data->difficultyChange = lstats.difficultyChange;
+        data->difficultyRetargetBlocks = lstats.difficultyRetargetBlocks;
     }
     if (lstats.feesValid) {
         data->halfHourFee = lstats.halfHourFee;
@@ -151,6 +155,8 @@ static void updateDisplayData(display_data_t *data) {
         // Use strncpy for fixed char arrays (no heap allocation)
         strncpy(data->poolHashrate, lstats.poolTotalHashrate, sizeof(data->poolHashrate) - 1);
         data->poolHashrate[sizeof(data->poolHashrate) - 1] = '\0';
+        strncpy(data->workerHashrate, lstats.workerHashrate, sizeof(data->workerHashrate) - 1);
+        data->workerHashrate[sizeof(data->workerHashrate) - 1] = '\0';
         strncpy(data->addressBestDiff, lstats.poolBestDifficulty, sizeof(data->addressBestDiff) - 1);
         data->addressBestDiff[sizeof(data->addressBestDiff) - 1] = '\0';
         // poolWorkersAddress would need separate API call for per-address count
@@ -254,10 +260,7 @@ void monitor_task(void *param) {
                 // DEBUG: Per-core hash contribution
                 extern volatile uint64_t s_core0Hashes;
                 extern volatile uint64_t s_core1Hashes;
-                mining_stats_t *debugStats = miner_get_stats();
-                uint64_t core1Est = debugStats->hashes - s_core0Hashes;
-                Serial.printf("[DEBUG] Core0: %llu | Core1: %llu | Total: %llu\n",
-                    s_core0Hashes, core1Est, debugStats->hashes);
+                Serial.printf("[STATS] Core0: %llu hashes, Core1: %llu hashes\n", s_core0Hashes, s_core1Hashes);
 
                 // Heap monitoring - track memory usage over time
                 uint32_t freeHeap = ESP.getFreeHeap();

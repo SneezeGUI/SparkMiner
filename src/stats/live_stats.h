@@ -63,7 +63,8 @@ typedef struct {
     char networkDifficulty[24]; // Human readable
     double difficultyRaw;
     float difficultyProgress;   // Progress to next adjustment (0-100)
-    int32_t difficultyChange;   // Expected change percentage
+    float difficultyChange;     // Expected change percentage
+    uint32_t difficultyRetargetBlocks; // Blocks remaining until retarget
 
     // Fees
     int fastestFee;
@@ -77,8 +78,9 @@ typedef struct {
     int poolWorkersCount;
     int failovers;                // Number of failovers from proxy
     char poolName[32];            // Friendly pool name from proxy
-    char poolTotalHashrate[24];   // Fixed char array
-    char poolBestDifficulty[24];  // Fixed char array
+    char poolTotalHashrate[24];   // Pool's total hashrate
+    char workerHashrate[24];      // Your combined worker hashrate
+    char poolBestDifficulty[24];  // Your best difficulty on pool
 
     // Status flags
     bool priceValid;

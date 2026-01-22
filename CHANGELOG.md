@@ -2,6 +2,22 @@
 
 All notable changes to SparkMiner will be documented in this file.
 
+## [v2.9.2] - 2026-01-14
+
+### Added
+- **Stratum Proxy Stats Integration**: Pool hashrate, worker hashrate, difficulty adjustment via custom stats API
+- `workerHashrate` field in `live_stats_t` and `display_data_t` structs
+- Pool total hashrate display in bottom info panel
+- Difficulty retarget progress and expected change % display
+
+### Changed
+- Stats grid layout: "Pool HR" renamed to "Workers" showing user's combined miner hashrate
+- Bottom panel now shows pool total hashrate
+- Extended stats API response parsing for pool and difficulty stats
+
+### Fixed
+- Worker visibility on pools - `mining.submit` now uses full `wallet.workername` from authorization
+
 ## [v2.9.1] - 2026-01-09
 
 ### Fixed

@@ -15,6 +15,7 @@
 
 #include <SPI.h>
 #include <TFT_eSPI.h>
+// #include <XPT2046_Touchscreen.h>  // Touch disabled - see memory bank for issues
 
 // ============================================================
 // Configuration
@@ -87,6 +88,12 @@
 
 static TFT_eSPI s_tft = TFT_eSPI();
 static TFT_eSprite s_sprite = TFT_eSprite(&s_tft);
+
+// Touch controller disabled - see memory bank for implementation issues
+// #if defined(ESP32_2432S028)
+//     static SPIClass s_touchSpi = SPIClass(VSPI);
+//     static XPT2046_Touchscreen s_touch(TOUCH_CS_PIN, TOUCH_IRQ_PIN);
+// #endif
 
 static uint8_t s_currentScreen = SCREEN_MINING;
 static uint8_t s_brightness = 100;
@@ -397,10 +404,17 @@ static void drawMiningScreen(const display_data_t *data) {
     s_tft.fillRoundRect(MARGIN - 4, y - 4, w - 2*MARGIN + 8, 38, 4, COLOR_PANEL);
     s_tft.drawRoundRect(MARGIN - 4, y - 4, w - 2*MARGIN + 8, 38, 4, COLOR_ACCENT);
 
-    s_tft.setTextSize(2);
-    s_tft.setCursor(MARGIN + 4, y + 6);
-    s_tft.setTextColor(COLOR_ACCENT);
-    s_tft.print(formatHashrate(data->hashRate));
+    // Sprite buffered hashrate
+    int hrWidth = 160;
+    int hrHeight = 24;
+    s_sprite.createSprite(hrWidth, hrHeight);
+    s_sprite.fillSprite(COLOR_PANEL);
+    s_sprite.setTextColor(COLOR_ACCENT, COLOR_PANEL);
+    s_sprite.setTextSize(2);
+    s_sprite.setCursor(0, 4);
+    s_sprite.print(formatHashrate(data->hashRate));
+    s_sprite.pushSprite(MARGIN + 4, y + 6);
+    s_sprite.deleteSprite();
 
     // Shares on right side of hashrate panel
     // Portrait: shift toward center to fit 5+ digit share counts (e.g., "12345/12345")
@@ -428,11 +442,12 @@ static void drawMiningScreen(const display_data_t *data) {
         {"Best",     formatDifficulty(data->bestDifficulty), COLOR_SPARK1},
         {"Hashes",   formatNumber(data->totalHashes), COLOR_FG},
         {"Uptime",   formatUptime(data->uptimeSeconds), COLOR_FG},
-        {"32-bit",   String(data->blocks32), COLOR_SPARK2},
+        {"Jobs",     String(data->templates), COLOR_FG},
         {"Blocks",   String(data->blocksFound), COLOR_SUCCESS},
+        {"Swarm HR", (strlen(data->workerHashrate) > 0) ? String(data->workerHashrate) : "---", COLOR_SPARK1},
     };
 
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         int col = i % cols;
         int row = i / cols;
         int x = MARGIN + col * (boxW + MARGIN);
@@ -492,21 +507,41 @@ static void drawMiningScreen(const display_data_t *data) {
     s_tft.setTextColor(COLOR_FG);
     s_tft.print(formatDifficulty(data->poolDifficulty));
 
-    // Jobs count on right side of Diff line
+    // Fee rate on right side of Diff line
     s_tft.setTextColor(COLOR_DIM);
     s_tft.setCursor(w - 90, y);
-    s_tft.print("Jobs: ");
-    s_tft.setTextColor(COLOR_FG);
-    s_tft.print(String(data->templates));
+    s_tft.print("Fee: ");
+    s_tft.setTextColor(COLOR_SPARK2);
+    s_tft.print(data->halfHourFee > 0 ? String(data->halfHourFee) + " sat" : "---");
 
     y += 14;
 
-    // IP address (full width since ping moved to status bar)
+    // Pool hashrate (left) and block height (right)
     s_tft.setTextColor(COLOR_DIM);
     s_tft.setCursor(MARGIN + 2, y);
-    s_tft.print("IP: ");
+    s_tft.print("Pool: ");
+    s_tft.setTextColor(COLOR_SPARK1);
+    s_tft.print((strlen(data->poolHashrate) > 0) ? data->poolHashrate : "---");
+
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(w - 90, y);
+    s_tft.print("Block: ");
     s_tft.setTextColor(COLOR_FG);
-    s_tft.print(data->ipAddress ? data->ipAddress : "---");
+    s_tft.print(data->blockHeight > 0 ? String(data->blockHeight) : "---");
+
+    y += 22;
+
+    // LAN Info panel
+    s_tft.fillRoundRect(MARGIN - 4, y, w - 2*MARGIN + 8, 24, 4, COLOR_PANEL);
+    s_tft.drawRoundRect(MARGIN - 4, y, w - 2*MARGIN + 8, 24, 4, COLOR_SPARK2);
+
+    y += 5;
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(MARGIN + 2, y);
+    s_tft.print("LAN: ");
+    s_tft.setTextColor(COLOR_FG);
+    const char *ip = data->ipAddress ? data->ipAddress : "---";
+    s_tft.print(ip);
 
     drawBottomStatusBar(data);
 }
@@ -638,11 +673,20 @@ static void drawClockScreen(const display_data_t *data) {
     char timeStr[16];
     strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
 
-    s_tft.setTextColor(COLOR_ACCENT);
-    s_tft.setTextSize(4);
-    // Center text approximation (4 chars * 6px * 4 scale = 96px for "HH:MM")
-    s_tft.setCursor(w / 2 - 96, y + 10);
-    s_tft.print(timeStr);
+    int timeW = 220;
+    int timeH = 36;
+    s_sprite.createSprite(timeW, timeH);
+    s_sprite.fillSprite(COLOR_PANEL);
+    s_sprite.setTextColor(COLOR_ACCENT, COLOR_PANEL);
+    s_sprite.setTextSize(4);
+    // Center text in sprite
+    int textW = s_sprite.textWidth(timeStr);
+    s_sprite.setCursor((timeW - textW) / 2, 4);
+    s_sprite.print(timeStr);
+    
+    // Push centered on screen
+    s_sprite.pushSprite(w / 2 - timeW / 2, y + 6);
+    s_sprite.deleteSprite();
 
     y += 70;
 
@@ -717,6 +761,13 @@ void display_init(uint8_t rotation, uint8_t brightness) {
     s_rotation = rotation;
     s_tft.setRotation(rotation);
     s_tft.fillScreen(COLOR_BG);
+
+    // Touch controller disabled - see memory bank for implementation issues
+    // #if defined(ESP32_2432S028)
+    //     s_touchSpi.begin(TOUCH_CLK_PIN, TOUCH_MISO_PIN, TOUCH_MOSI_PIN);
+    //     s_touch.begin(s_touchSpi);
+    //     s_touch.setRotation(rotation);
+    // #endif
 
     // Initialize backlight PWM
     #ifdef LCD_BL_PIN
@@ -938,13 +989,13 @@ void display_show_reset_complete() {
 }
 
 bool display_touched() {
-    // TODO: Implement touch detection with XPT2046
+    // Touch disabled - XPT2046 implementation had issues on CYD
+    // See memory bank for details on failed implementation attempts
     return false;
 }
 
 void display_handle_touch() {
-    // TODO: Implement touch handling
-    // For now, just cycle screens
+    // Touch disabled - use button to cycle screens instead
     display_next_screen();
 }
 

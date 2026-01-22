@@ -47,6 +47,7 @@ struct display_data_s {
     int poolWorkersTotal;       // Total workers on pool
     int poolWorkersAddress;     // Workers on your address
     char poolHashrate[24];      // Pool total hashrate
+    char workerHashrate[24];    // Your combined worker hashrate
     char addressBestDiff[24];   // Your best difficulty on pool
 
     // Network info
@@ -60,6 +61,11 @@ struct display_data_s {
     char networkHashrate[24];
     char networkDifficulty[24];
     int halfHourFee;
+    
+    // Difficulty Adjustment
+    float difficultyProgress;
+    float difficultyChange;
+    uint32_t difficultyRetargetBlocks;
 };
 
 #if USE_DISPLAY

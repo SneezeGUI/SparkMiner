@@ -637,6 +637,44 @@ static bool fetchFromCustomApi() {
         }
     }
 
+    // Difficulty Adjustment (from proxy's mempool.space fetch)
+    if (s_jsonDoc.containsKey("difficulty_progress")) {
+        s_stats.difficultyProgress = s_jsonDoc["difficulty_progress"];
+    }
+    if (s_jsonDoc.containsKey("difficulty_change")) {
+        s_stats.difficultyChange = s_jsonDoc["difficulty_change"];
+    }
+    if (s_jsonDoc.containsKey("difficulty_retarget_blocks")) {
+        s_stats.difficultyRetargetBlocks = s_jsonDoc["difficulty_retarget_blocks"];
+    }
+
+    // Pool/Worker hashrate (from proxy's pool API fetch)
+    if (s_jsonDoc.containsKey("pool_hashrate")) {
+        const char *hr = s_jsonDoc["pool_hashrate"];
+        if (hr && strlen(hr) > 0) {
+            strncpy(s_stats.poolTotalHashrate, hr, sizeof(s_stats.poolTotalHashrate) - 1);
+            s_stats.poolTotalHashrate[sizeof(s_stats.poolTotalHashrate) - 1] = '\0';
+        }
+    }
+    if (s_jsonDoc.containsKey("worker_hashrate")) {
+        const char *hr = s_jsonDoc["worker_hashrate"];
+        if (hr && strlen(hr) > 0) {
+            strncpy(s_stats.workerHashrate, hr, sizeof(s_stats.workerHashrate) - 1);
+            s_stats.workerHashrate[sizeof(s_stats.workerHashrate) - 1] = '\0';
+        } else {
+            s_stats.workerHashrate[0] = '\0';
+        }
+    }
+
+    // Address best difficulty from pool (lifetime best for this wallet)
+    if (s_jsonDoc.containsKey("address_best_diff")) {
+        const char *diff = s_jsonDoc["address_best_diff"];
+        if (diff && strlen(diff) > 0) {
+            strncpy(s_stats.poolBestDifficulty, diff, sizeof(s_stats.poolBestDifficulty) - 1);
+            s_stats.poolBestDifficulty[sizeof(s_stats.poolBestDifficulty) - 1] = '\0';
+        }
+    }
+
     xSemaphoreGive(s_statsMutex);
 
     Serial.printf("[STATS] Custom API updated: BTC $%.0f, Block %lu, Workers %d\n",
@@ -840,11 +878,11 @@ static void updateNetworkDifficulty() {
     if (fetchJson(API_DIFFICULTY, s_jsonDoc)) {
         xSemaphoreTake(s_statsMutex, portMAX_DELAY);
         s_stats.difficultyProgress = s_jsonDoc["progressPercent"];
-        double change = s_jsonDoc["difficultyChange"]; // API returns float
-        s_stats.difficultyChange = (int32_t)change;
+        s_stats.difficultyChange = s_jsonDoc["difficultyChange"];
+        s_stats.difficultyRetargetBlocks = s_jsonDoc["remainingBlocks"];
         xSemaphoreGive(s_statsMutex);
-        Serial.printf("[STATS] Difficulty adj: %.1f%% progress, %.1f%% change\n", 
-                      s_stats.difficultyProgress, change);
+        Serial.printf("[STATS] Difficulty adj: %.1f%% progress, %.1f%% change, %u blocks left\n", 
+                      s_stats.difficultyProgress, s_stats.difficultyChange, s_stats.difficultyRetargetBlocks);
     }
 }
 
@@ -958,6 +996,8 @@ void live_stats_task(void *param) {
                     s_lastCustomApiUpdate = millis();
                     vTaskDelay(500 / portTICK_PERIOD_MS);
                 }
+                // Custom API now provides difficulty adjustment from proxy
+                // No need for separate HTTPS fetch
             } else {
                 // Priority 2/3/4: Use individual APIs
 

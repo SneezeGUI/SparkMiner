@@ -330,6 +330,45 @@ static void hashCheck(const char *jobId, sha256_hash_t *ctx, uint32_t timestamp,
 // Public API
 // ============================================================
 
+#ifdef BENCHMARK_SHA_VERSIONS
+void run_sha_benchmark() {
+    Serial.println("[BENCHMARK] Starting SHA-256 version benchmark...");
+    volatile uint32_t *sha_base = (volatile uint32_t *)0x3FF03000;
+    uint32_t header[20] = {0}; // Dummy header
+    uint32_t midstate[8] = {0};
+    uint32_t tail[3] = {0};
+    uint32_t nonce = 0;
+    uint64_t hashes = 0;
+    bool active = true;
+
+    // Prep v4 data
+    sha256_compute_midstate_v4(midstate, header);
+    tail[0] = header[16]; tail[1] = header[17]; tail[2] = header[18];
+
+    Serial.println("[BENCHMARK] Running v3 (100k hashes)...");
+    uint32_t t0 = micros();
+    hashes = 0;
+    active = true;
+    while(hashes < 100000) {
+        sha256_pipelined_mine_v3(sha_base, header, &nonce, &hashes, &active);
+    }
+    uint32_t t1 = micros();
+    Serial.printf("[BENCHMARK] v3: %u us for %llu hashes (%.2f kH/s)\n", 
+        t1-t0, hashes, (double)hashes*1000.0/(t1-t0));
+
+    Serial.println("[BENCHMARK] Running v4 (100k hashes)...");
+    hashes = 0;
+    active = true;
+    t0 = micros();
+    while(hashes < 100000) {
+         sha256_pipelined_mine_v4(sha_base, midstate, tail, &nonce, &hashes, &active);
+    }
+    t1 = micros();
+    Serial.printf("[BENCHMARK] v4: %u us for %llu hashes (%.2f kH/s)\n", 
+        t1-t0, hashes, (double)hashes*1000.0/(t1-t0));
+}
+#endif
+
 void miner_init() {
     s_jobMutex = xSemaphoreCreateMutex();
     s_shaMutex = xSemaphoreCreateMutex();  // For dual-core hardware SHA sharing
@@ -343,6 +382,10 @@ void miner_init() {
 
     Serial.println("[MINER] Initialized (Hardware SHA-256 via direct register access)");
     Serial.println("[MINER] Dual-core hardware SHA sharing enabled");
+
+#ifdef BENCHMARK_SHA_VERSIONS
+    run_sha_benchmark();
+#endif
 }
 
 void miner_start_job(const stratum_job_t *job) {
@@ -613,11 +656,19 @@ void miner_task_core1(void *param) {
         s_core1HasSha = true;
 
         // Re-initialize SHA hardware before loop
-        DPORT_REG_SET_BIT(DPORT_PERI_CLK_EN_REG, DPORT_PERI_EN_SHA);
-        DPORT_REG_CLR_BIT(DPORT_PERI_RST_EN_REG, DPORT_PERI_EN_SHA | DPORT_PERI_EN_SECUREBOOT);
+        // Only re-init if SHA was actually disabled
+        if (!(DPORT_REG_READ(DPORT_PERI_CLK_EN_REG) & DPORT_PERI_EN_SHA)) {
+            DPORT_REG_SET_BIT(DPORT_PERI_CLK_EN_REG, DPORT_PERI_EN_SHA);
+            DPORT_REG_CLR_BIT(DPORT_PERI_RST_EN_REG, DPORT_PERI_EN_SHA | DPORT_PERI_EN_SECUREBOOT);
+        }
 
         while (s_miningActive) {
+            // Track hash count before v3 call for per-core stats
+            uint64_t hashBefore = s_stats.hashes;
+
             // Run pipelined assembly mining loop v3 (working version)
+            // NOTE: v4 midstate injection does NOT work on ESP32 - SHA_LOAD copies
+            // FROM internal state TO SHA_TEXT, there's no way to restore a midstate
             bool candidate = sha256_pipelined_mine_v3(
                 sha_base,
                 header_swapped,
@@ -625,6 +676,9 @@ void miner_task_core1(void *param) {
                 &s_stats.hashes,
                 &s_miningActive
             );
+
+            // Track Core 1 hash contribution
+            s_core1Hashes += (s_stats.hashes - hashBefore);
 
             if (!s_miningActive) break;
 
@@ -654,8 +708,11 @@ void miner_task_core1(void *param) {
                 loop_iter = 0;
                 vTaskDelay(1);
                 // Re-init after yield
-                DPORT_REG_SET_BIT(DPORT_PERI_CLK_EN_REG, DPORT_PERI_EN_SHA);
-                DPORT_REG_CLR_BIT(DPORT_PERI_RST_EN_REG, DPORT_PERI_EN_SHA | DPORT_PERI_EN_SECUREBOOT);
+                // Only re-init if SHA was actually disabled
+                if (!(DPORT_REG_READ(DPORT_PERI_CLK_EN_REG) & DPORT_PERI_EN_SHA)) {
+                    DPORT_REG_SET_BIT(DPORT_PERI_CLK_EN_REG, DPORT_PERI_EN_SHA);
+                    DPORT_REG_CLR_BIT(DPORT_PERI_RST_EN_REG, DPORT_PERI_EN_SHA | DPORT_PERI_EN_SECUREBOOT);
+                }
             }
         }
 
