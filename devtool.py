@@ -731,10 +731,15 @@ class DevTool:
     # ============================================================
 
     def build_release(self, board_keys: List[str] = None,
-                      parallel: bool = None) -> Dict[str, bool]:
+                      parallel: bool = None, clean: bool = False) -> Dict[str, bool]:
         """Build firmware for multiple boards"""
         if parallel is None:
             parallel = self.config.release_parallel
+
+        # Clean all build artifacts first if requested
+        if clean:
+            print(f"{c('[CLEAN]', Colors.YELLOW)} Cleaning all build artifacts...")
+            self.run_cmd(self.get_pio_cmd() + ["run", "-t", "clean"], quiet=True)
 
         boards = []
         if board_keys:
@@ -1157,6 +1162,7 @@ Examples:
     parser.add_argument("-p", "--port", metavar="PORT", help="Serial port")
     parser.add_argument("-v", "--version", metavar="TAG", help="Create git tag for release")
     parser.add_argument("--parallel", action="store_true", help="Parallel release builds")
+    parser.add_argument("--clean", action="store_true", help="Clean build artifacts before release")
     parser.add_argument("--prune", action="store_true", help="Remove old releases")
     parser.add_argument("--keep", type=int, default=5, help="Releases to keep when pruning")
     parser.add_argument("-y", "--yes", action="store_true", help="Skip confirmations")
@@ -1220,7 +1226,7 @@ Examples:
                     sys.exit(0)
             tool.create_git_tag(args.version)
 
-        results = tool.build_release(parallel=args.parallel)
+        results = tool.build_release(parallel=args.parallel, clean=args.clean)
 
         if args.prune:
             tool.prune_releases(args.keep)
