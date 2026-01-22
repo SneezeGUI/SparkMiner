@@ -308,6 +308,16 @@ static void hashCheck(const char *jobId, sha256_hash_t *ctx, uint32_t timestamp,
         double shareDiff = getDifficulty(ctx);
         Serial.printf("[MINER] Share found! Diff: %.4f (pool: %.4f) Nonce: %08x\n", shareDiff, s_poolDifficulty, nonce);
 
+        // Debug logging for share validation (Issue #5 investigation)
+        #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(DEBUG_SHARE_VALIDATION)
+        Serial.printf("[SHARE] job=%s time=%08x nonce=%08x\n", jobId, timestamp, nonce);
+        Serial.printf("[SHARE] hash[28-31]=%02x%02x%02x%02x (should have leading zeros)\n",
+                      ctx->bytes[28], ctx->bytes[29], ctx->bytes[30], ctx->bytes[31]);
+        char en2Hex[17];
+        encodeExtraNonce(en2Hex, s_extraNonce2Size, s_extraNonce2);
+        Serial.printf("[SHARE] extraNonce2=%s\n", en2Hex);
+        #endif
+
         // Submit share
         submit_entry_t submission;
         memset(&submission, 0, sizeof(submission));
@@ -836,9 +846,24 @@ void miner_task_core1(void *param) {
                 uint32_t candidate_nonce_swapped = nonce_swapped - 1;
                 uint32_t candidate_nonce_native = __builtin_bswap32(candidate_nonce_swapped);
 
+                // Debug logging for S3 share validation investigation (Issue #5)
+                #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(DEBUG_SHARE_VALIDATION)
+                Serial.printf("[S3-DBG] Candidate found! nonce_swapped=%08x native=%08x\n",
+                              candidate_nonce_swapped, candidate_nonce_native);
+                #endif
+
                 // BitsyMiner CRITICAL: Verify with SOFTWARE SHA on UNSWAPPED header
                 hbVerify.nonce = candidate_nonce_native;
-                if (miner_sha256_header(&sw_midstate, &ctx, &hbVerify)) {
+                bool swVerified = miner_sha256_header(&sw_midstate, &ctx, &hbVerify);
+
+                // Debug logging for S3 share validation investigation (Issue #5)
+                #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(DEBUG_SHARE_VALIDATION)
+                Serial.printf("[S3-DBG] SW verify=%s hash[28-31]=%02x%02x%02x%02x\n",
+                              swVerified ? "PASS" : "FAIL",
+                              ctx.bytes[28], ctx.bytes[29], ctx.bytes[30], ctx.bytes[31]);
+                #endif
+
+                if (swVerified) {
                     hashCheck(jobId, &ctx, hbVerify.timestamp, candidate_nonce_native);
                 }
             }

@@ -43,6 +43,10 @@ static uint32_t s_messageId = 1;
 static uint32_t s_lastActivity = 0;
 static uint32_t s_lastSubmit = 0;
 
+// WiFi reconnection state (Issue #4 fix)
+static uint32_t s_wifiReconnectAttempts = 0;
+static uint32_t s_lastWifiReconnectAttempt = 0;
+
 // Extra nonce from subscription
 static char s_extraNonce1[32] = {0};
 static int s_extraNonce2Size = 4;
@@ -512,15 +516,35 @@ void stratum_task(void *param) {
     Serial.printf("[STRATUM] Task started on core %d\n", xPortGetCoreID());
 
     while (true) {
-        // Wait for WiFi
+        // Wait for WiFi with auto-reconnect (Issue #4 fix)
         if (WiFi.status() != WL_CONNECTED) {
             if (s_isConnected) {
                 miner_stop();
                 client.stop();
                 s_isConnected = false;
+                Serial.println("[WIFI] Connection lost, attempting reconnect...");
             }
+
+            // Calculate exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
+            uint32_t backoffMs = 1000 * (1 << min(s_wifiReconnectAttempts, (uint32_t)5));
+            if (backoffMs > 30000) backoffMs = 30000;
+
+            if (millis() - s_lastWifiReconnectAttempt >= backoffMs) {
+                s_wifiReconnectAttempts++;
+                s_lastWifiReconnectAttempt = millis();
+                Serial.printf("[WIFI] Reconnect attempt %lu (backoff: %lums)\n",
+                              s_wifiReconnectAttempts, backoffMs);
+                WiFi.reconnect();
+            }
+
             vTaskDelay(500 / portTICK_PERIOD_MS);
             continue;
+        }
+
+        // WiFi connected - reset reconnect counter
+        if (s_wifiReconnectAttempts > 0) {
+            Serial.printf("[WIFI] Reconnected after %lu attempts\n", s_wifiReconnectAttempts);
+            s_wifiReconnectAttempts = 0;
         }
 
         // Check pool configuration
