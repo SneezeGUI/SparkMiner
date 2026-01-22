@@ -2,6 +2,16 @@
 
 All notable changes to SparkMiner will be documented in this file.
 
+## [v2.9.3] - 2026-01-22
+
+### Added
+- **Heltec Wireless Paper v1.1 support** - ESP32-S3 with 2.13" E-Ink display (~278 KH/s)
+- New build environments: `wireless-paper` and `wireless-paper-headless`
+- E-Ink display driver with partial refresh for display durability
+
+### Fixed
+- Typo in platformio.ini comments ("monocrhome" → "monochrome")
+
 ## [v2.9.2] - 2026-01-14
 
 ### Added
