@@ -727,11 +727,8 @@ class DevTool:
     def build_release(self, board_keys: List[str] = None,
                       parallel: bool = None) -> Dict[str, bool]:
         """Build firmware for multiple boards"""
-        # Auto-detect parallel mode based on system capabilities
-        optimal_workers = self.get_optimal_workers()
         if parallel is None:
-            # Default to parallel if system can handle 2+ workers
-            parallel = optimal_workers >= 2
+            parallel = self.config.release_parallel
 
         boards = []
         if board_keys:
@@ -760,6 +757,7 @@ class DevTool:
         print(f"  Boards:  {len(boards)}")
         print(f"  System:  {self.get_system_info()}")
         if parallel:
+            optimal_workers = self.get_optimal_workers()
             actual_workers = min(optimal_workers, len(boards))
             print(f"  Mode:    Parallel ({actual_workers} workers)")
         else:
