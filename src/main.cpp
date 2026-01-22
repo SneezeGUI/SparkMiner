@@ -46,7 +46,7 @@ TaskHandle_t buttonTask = NULL;
 volatile bool systemReady = false;
 
 // Button handling (OneButton)
-#if defined(BUTTON_PIN) && USE_DISPLAY
+#if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
 OneButton button(BUTTON_PIN, true, true);  // active low, enable pullup
 
 // Single click: cycle screens
@@ -119,7 +119,7 @@ void onButtonLongPressStart() {
 }
 #endif
 
-#if defined(BUTTON_PIN) && USE_DISPLAY
+#if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
 /**
  * Dedicated button handling task
  * Runs at higher priority than mining to ensure responsive UI
@@ -304,13 +304,13 @@ void setup() {
                            config->backupWallet, config->backupPoolPassword, config->workerName);
 
     // Initialize display early (needed for WiFi setup screen)
-    #if USE_DISPLAY
+    #if (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
         display_init(config->rotation, config->brightness);
         display_set_inverted(config->invertColors);
     #endif
 
     // Setup button handlers (OneButton)
-    #if defined(BUTTON_PIN) && USE_DISPLAY
+    #if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
         button.setClickMs(400);          // Time window for single click (ms)
         button.setPressMs(1500);         // Time for long press to start (1.5s)
         button.setDebounceMs(50);        // Debounce time (ms)
@@ -350,7 +350,7 @@ void setup() {
         #endif
     );
     Serial.println("Board: " BOARD_NAME);
-    #if USE_DISPLAY
+    #if (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
         Serial.println("Display: Enabled");
     #else
         Serial.println("Display: Disabled");
@@ -424,7 +424,7 @@ void setupTasks() {
 
     // Button task (responsive UI during mining)
     // Needs 4KB+ stack for NVS writes (rotation save) and display updates
-    #if defined(BUTTON_PIN) && USE_DISPLAY
+    #if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
         xTaskCreatePinnedToCore(
             button_task,
             "Button",
