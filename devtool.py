@@ -356,9 +356,15 @@ class DevTool:
             return f"{cores} threads"
 
     def is_git_dirty(self) -> bool:
-        """Check for uncommitted changes"""
+        """Check for uncommitted changes (ignores untracked files)"""
         result = self.run_cmd(["git", "status", "--porcelain"], capture=True)
-        return bool(result and result.stdout.strip())
+        if not result or not result.stdout.strip():
+            return False
+        # Filter out untracked files (??) - only check modified/staged files
+        for line in result.stdout.strip().split('\n'):
+            if line and not line.startswith('??'):
+                return True
+        return False
 
     def get_firmware_dir(self) -> Path:
         """Get firmware output directory"""
