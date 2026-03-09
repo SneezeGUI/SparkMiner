@@ -186,6 +186,54 @@
     // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
 
 // ============================================================
+// Waveshare ESP32-S3-Touch-LCD-1.83
+// 240x284 ST7789P, CST816D touch, AXP2101 PMU
+// ============================================================
+#elif defined(WAVESHARE_S3_LCD183)
+    #define BOARD_NAME "Waveshare-S3-LCD-1.83"
+
+    #ifndef USE_DISPLAY
+        #define USE_DISPLAY 1
+    #endif
+    #define DISPLAY_TYPE_TFT 1
+
+    #ifdef TFT_WIDTH
+        #undef TFT_WIDTH
+    #endif
+    #define TFT_WIDTH 240
+
+    #ifdef TFT_HEIGHT
+        #undef TFT_HEIGHT
+    #endif
+    #define TFT_HEIGHT 284
+
+    // Backlight
+    #ifndef TFT_BL_PIN
+        #define TFT_BL_PIN 40
+    #endif
+
+    // No physical button on this board
+    #ifndef BUTTON_PIN
+        #define BUTTON_PIN -1
+    #endif
+    #define BUTTON_ACTIVE_LOW 1
+
+    // AXP2101 PMU
+    #define HAS_AXP2101 1
+    #define AXP2101_I2C_ADDR 0x34
+    #define AXP2101_SDA_PIN 15
+    #define AXP2101_SCL_PIN 14
+
+    // Touch (CST816D on same I2C bus)
+    #define TOUCH_SDA_PIN 15
+    #define TOUCH_SCL_PIN 14
+    #define TOUCH_RST_PIN 39
+    #define TOUCH_INT_PIN 13
+    #define TOUCH_I2C_ADDR 0x15
+
+    // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
+
+// ============================================================
 // ESP32-S3 DevKit - Hardware SHA (headless)
 // ============================================================
 #elif defined(ESP32_S3_DEVKIT)

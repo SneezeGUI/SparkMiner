@@ -35,6 +35,40 @@ extern "C" {
 #include "stats/monitor.h"
 #include "display/display.h"
 
+// AXP2101 PMU support for Waveshare board
+#if defined(HAS_AXP2101)
+#include <Wire.h>
+#define AXP2101_ADDR 0x34
+
+static void axp2101_write(uint8_t reg, uint8_t val) {
+    Wire1.beginTransmission(AXP2101_ADDR);
+    Wire1.write(reg);
+    Wire1.write(val);
+    Wire1.endTransmission();
+}
+
+static uint8_t axp2101_read(uint8_t reg) {
+    Wire1.beginTransmission(AXP2101_ADDR);
+    Wire1.write(reg);
+    Wire1.endTransmission(false);
+    Wire1.requestFrom((uint8_t)AXP2101_ADDR, (uint8_t)1);
+    return Wire1.available() ? Wire1.read() : 0;
+}
+
+static void axp2101_init() {
+    Wire1.begin(AXP2101_SDA, AXP2101_SCL, 400000);
+    delay(10);
+
+    // Enable fuel gauge (battery percentage register 0xA4)
+    uint8_t fuel_cfg = axp2101_read(0xA2);
+    axp2101_write(0xA2, fuel_cfg | 0x40);
+
+    // Read battery percentage to verify
+    uint8_t batt = axp2101_read(0xA4);
+    Serial.printf("[AXP2101] PMU initialized, battery: %d%%\n", batt);
+}
+#endif
+
 // Task handles
 TaskHandle_t miner0Task = NULL;
 TaskHandle_t miner1Task = NULL;
@@ -46,7 +80,7 @@ TaskHandle_t buttonTask = NULL;
 volatile bool systemReady = false;
 
 // Button handling (OneButton)
-#if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
+#if defined(BUTTON_PIN) && (BUTTON_PIN >= 0) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
 OneButton button(BUTTON_PIN, true, true);  // active low, enable pullup
 
 // Single click: wake screen if off, otherwise cycle screens
@@ -139,7 +173,7 @@ void onButtonLongPressStart() {
 }
 #endif
 
-#if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
+#if defined(BUTTON_PIN) && (BUTTON_PIN >= 0) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
 /**
  * Dedicated button handling task (with display)
  * Runs at higher priority than mining to ensure responsive UI
@@ -152,7 +186,7 @@ void button_task(void *param) {
     }
 }
 
-#elif defined(BUTTON_PIN)
+#elif defined(BUTTON_PIN) && (BUTTON_PIN >= 0)
 /**
  * Headless button handling task
  * Simple long-press detection for factory reset (no OneButton/display dependencies)
@@ -277,7 +311,7 @@ uint32_t tryOverclock() {
  * Hold BOOT button for 5+ seconds to wipe NVS and restart
  */
 void checkFactoryReset() {
-    #ifdef BUTTON_PIN
+    #if defined(BUTTON_PIN) && (BUTTON_PIN >= 0)
     pinMode(BUTTON_PIN, INPUT_PULLUP);
 
     // Check if button is pressed at boot
@@ -381,6 +415,11 @@ void setup() {
     stratum_set_backup_pool(config->backupPoolUrl, config->backupPoolPort,
                            config->backupWallet, config->backupPoolPassword, config->workerName);
 
+    // Initialize AXP2101 PMU (Waveshare board - must be before display)
+    #if defined(HAS_AXP2101)
+        axp2101_init();
+    #endif
+
     // Initialize display early (needed for WiFi setup screen)
     #if (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
         display_init(config->rotation, config->brightness);
@@ -388,7 +427,7 @@ void setup() {
     #endif
 
     // Setup button handlers (OneButton)
-    #if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
+    #if defined(BUTTON_PIN) && (BUTTON_PIN >= 0) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
         button.setClickMs(400);          // Time window for single click (ms)
         button.setPressMs(1500);         // Time for long press to start (1.5s)
         button.setDebounceMs(50);        // Debounce time (ms)
@@ -511,7 +550,7 @@ void setupTasks() {
 
     // Button task (responsive UI during mining)
     // Needs 4KB+ stack for NVS writes (rotation save) and display updates
-    #if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
+    #if defined(BUTTON_PIN) && (BUTTON_PIN >= 0) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
         xTaskCreatePinnedToCore(
             button_task,
             "Button",
@@ -521,7 +560,7 @@ void setupTasks() {
             &buttonTask,
             0               // Core 0 with other UI tasks
         );
-    #elif defined(BUTTON_PIN)
+    #elif defined(BUTTON_PIN) && (BUTTON_PIN >= 0)
         // Headless button task for factory reset (Issue #15 fix)
         xTaskCreatePinnedToCore(
             button_task,

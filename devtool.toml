@@ -130,6 +130,15 @@ needs_boot_mode = true
 port_changes_on_reset = true
 group = "OLED Display"
 
+[boards.waveshare-s3-lcd183]
+name = "Waveshare ESP32-S3-Touch-LCD-1.83"
+env = "waveshare-s3-lcd183"
+chip = "esp32s3"
+description = "ESP32-S3 with 1.83\" ST7789P 240x284, AXP2101 PMU, CST816D touch"
+needs_boot_mode = true
+port_changes_on_reset = true
+group = "ESP32-S3 Display"
+
 [boards.wireless-paper]
 name = "Heltec Wireless Paper"
 env = "wireless-paper"

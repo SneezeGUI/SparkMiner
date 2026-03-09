@@ -46,6 +46,11 @@
     #define LCD_BL_PIN      4
 #endif
 
+// Waveshare ESP32-S3-Touch-LCD-1.83 (240x284, SPI)
+#if defined(WAVESHARE_S3_LCD183)
+    #define LCD_BL_PIN      40
+#endif
+
 // PWM settings for backlight
 #define LEDC_CHANNEL    0
 #define LEDC_FREQ       5000
@@ -71,6 +76,11 @@
     #define HEADER_HEIGHT   24
     #define SMALL_DISPLAY   1
 #elif defined(LILYGO_T_DISPLAY_S3)
+    #define MARGIN          6
+    #define LINE_HEIGHT     18
+    #define HEADER_HEIGHT   30
+    #define SMALL_DISPLAY   1
+#elif defined(WAVESHARE_S3_LCD183)
     #define MARGIN          6
     #define LINE_HEIGHT     18
     #define HEADER_HEIGHT   30
