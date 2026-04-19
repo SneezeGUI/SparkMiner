@@ -48,6 +48,9 @@ volatile bool systemReady = false;
 // Button handling (OneButton)
 #if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
 OneButton button(BUTTON_PIN, true, true);  // active low, enable pullup
+#ifdef USER_BUTTON_PIN
+OneButton userButton(USER_BUTTON_PIN, true, true);
+#endif
 
 // Single click: wake screen if off, otherwise cycle screens
 void onButtonClick() {
@@ -58,6 +61,13 @@ void onButtonClick() {
     }
     display_next_screen();
 }
+
+#ifdef HELTEC_V3
+void log_heltec_pins() {
+    Serial.printf("[HeltecV3] OLED SDA=%d SCL=%d RST=%d VEXT=%d\n", OLED_SDA_PIN, OLED_SCL_PIN, OLED_RST_PIN, VEXT_PIN);
+    Serial.printf("[HeltecV3] LED=%d BOOT=%d USER=%d\n", LED_PIN, BUTTON_PIN, USER_BUTTON_PIN);
+}
+#endif
 
 // Double click: cycle screen rotation (0->1->2->3->0)
 void onButtonDoubleClick() {
@@ -141,7 +151,7 @@ void onButtonLongPressStart() {
 
 #if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
 /**
- * Dedicated button handling task (with display)
+ * Dedicated button handling task (wit display)
  * Runs at higher priority than mining to ensure responsive UI
  */
 void button_task(void *param) {
