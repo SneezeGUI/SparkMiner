@@ -395,6 +395,36 @@
     // SHA Implementation: classic ESP32 hardware SHA peripheral
     // Defined in platformio.ini via -D USE_HARDWARE_SHA=1
 
+// Heltec WiFi LoRa 32 V3 - ESP32-S3, 128x64 OLED (I2C), LoRa SX1262
+// ============================================================
+#elif defined(HELTEC_V3)
+    #define BOARD_NAME "Heltec WiFi LoRa 32 V3"
+
+    // Use OLED display (not TFT)
+    #define USE_DISPLAY 0
+    #define USE_OLED_DISPLAY 1
+
+    // OLED configuration (128x64 SSD1306 I2C)
+    #define OLED_WIDTH 128
+    #define OLED_HEIGHT 64
+    #define OLED_SDA_PIN 17
+    #define OLED_SCL_PIN 18
+    #define OLED_I2C_ADDR 0x3C
+    #define OLED_RST_PIN 21
+
+    // Display power enable (Vext)
+    #define VEXT_PIN 36
+
+    // Onboard LED
+    #define LED_PIN 35
+
+    // Buttons
+    #define BUTTON_PIN 0      // BOOT
+    #define USER_BUTTON_PIN 14
+    #define BUTTON_ACTIVE_LOW 1
+
+    // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
+
 // ============================================================
 // Default - Generic ESP32
 // ============================================================
