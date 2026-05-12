@@ -164,6 +164,28 @@ needs_boot_mode = true
 port_changes_on_reset = true
 group = "OLED Display"
 
+[boards.seeed-xiao-esp32s3]
+name = "Seeed XIAO ESP32-S3"
+env = "seeed-xiao-esp32s3"
+chip = "esp32s3"
+description = "Compact ESP32-S3 headless miner (22x26.5mm, USB-C, 16MB flash, no PSRAM)"
+needs_boot_mode = true
+port_changes_on_reset = true
+flash_mode = "dio"
+flash_freq = "80m"
+group = "Headless (No Display)"
+
+[boards.seeed-xiao-esp32s3-safe]
+name = "Seeed XIAO ESP32-S3 (Safe Upload)"
+env = "seeed-xiao-esp32s3-safe"
+chip = "esp32s3"
+description = "Safe recovery path: always upload via PlatformIO offset layout, no factory-bin flash"
+needs_boot_mode = true
+port_changes_on_reset = true
+flash_mode = "dio"
+flash_freq = "40m"
+group = "Headless (No Display)"
+
 # ============================================================
 # Release Settings
 # ============================================================
@@ -185,7 +207,7 @@ firmware_suffix = "_firmware.bin"
 
 [monitor]
 # Filters for platformio device monitor
-filters = ["colorize", "esp32_exception_decoder", "time"]
+filters = ["esp32_exception_decoder", "time"]
 # Auto-reconnect on disconnect
 auto_reconnect = true
 # Log to file (empty = disabled)

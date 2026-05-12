@@ -18,6 +18,17 @@
 #include "sha256_hw.h"
 #include "../stratum/stratum_types.h"
 
+typedef struct {
+	const char *chip;
+	const char *miningBackend;
+	bool hwShaAvailable;
+	bool hwShaHotLoop;
+	bool softwareMidstate;
+	bool dmaHotPath;
+	bool midstateRestoreSupported;
+	bool nonceSplitCore0LowCore1High;
+} miner_backend_info_t;
+
 /**
  * Initialize mining subsystem
  * - Disables watchdog timer
@@ -51,14 +62,17 @@ bool miner_is_running();
 mining_stats_t* miner_get_stats();
 
 /**
- * Mining task for Core 0 (software SHA, lower priority)
+ * Mining task for Core 0
+ * - ESP32-S3: software midstate-complete path (nonce low half)
+ * - ESP32: hybrid/software helper path
  * Yields periodically to allow WiFi/Stratum/Display tasks
  */
 void miner_task_core0(void *param);
 
 /**
  * Mining task for Core 1 (dedicated, high priority)
- * Uses pipelined SHA for maximum throughput
+ * - ESP32-S3: software midstate-complete path (nonce high half)
+ * - ESP32: pipelined SHA hardware path
  */
 void miner_task_core1(void *param);
 
@@ -76,5 +90,11 @@ double miner_get_difficulty();
  * Set extra nonce from pool subscription
  */
 void miner_set_extranonce(const char *extraNonce1, int extraNonce2Size);
+
+/**
+ * Backend capabilities and active-mode summary.
+ * Single source of truth for startup/status reporting.
+ */
+const miner_backend_info_t *miner_get_backend_info();
 
 #endif // MINER_H

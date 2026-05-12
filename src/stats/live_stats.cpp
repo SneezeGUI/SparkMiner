@@ -17,6 +17,7 @@
 #include "live_stats.h"
 #include "board_config.h"
 #include "../config/nvs_config.h"
+#include "../logging.h"
 
 // ============================================================
 // Globals
@@ -622,6 +623,12 @@ static bool fetchFromCustomApi() {
     if (s_jsonDoc.containsKey("workers")) {
         s_stats.poolWorkersCount = s_jsonDoc["workers"];
         s_stats.poolValid = true;
+    } else if (s_jsonDoc.containsKey("workersCount")) {
+        s_stats.poolWorkersCount = s_jsonDoc["workersCount"];
+        s_stats.poolValid = true;
+    } else if (s_jsonDoc.containsKey("pool_workers_count")) {
+        s_stats.poolWorkersCount = s_jsonDoc["pool_workers_count"];
+        s_stats.poolValid = true;
     }
 
     if (s_jsonDoc.containsKey("failovers")) {
@@ -983,7 +990,8 @@ void live_stats_task(void *param) {
     s_lastNetworkUpdate = bootTime - UPDATE_NETWORK_MS - 5000;
     s_lastCustomApiUpdate = bootTime - UPDATE_PRICE_MS - 1000;
 
-    Serial.println("[STATS] Task started");
+    log_wait_startup_barrier();
+    log_line("[STATS] Task started");
 
     while (true) {
         if (WiFi.status() == WL_CONNECTED) {

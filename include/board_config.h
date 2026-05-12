@@ -400,8 +400,12 @@
     #define BOARD_NAME "Heltec WiFi LoRa 32 V3"
 
     // Use OLED display (not TFT)
-    #define USE_DISPLAY 0
-    #define USE_OLED_DISPLAY 1
+    #ifndef USE_DISPLAY
+        #define USE_DISPLAY 0
+    #endif
+    #ifndef USE_OLED_DISPLAY
+        #define USE_OLED_DISPLAY 1
+    #endif
 
     // OLED configuration (128x64 SSD1306 I2C)
     #define OLED_WIDTH 128
@@ -421,6 +425,31 @@
     #define BUTTON_PIN 0      // BOOT
     #define USER_BUTTON_PIN 14
     #define BUTTON_ACTIVE_LOW 1
+
+    // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
+
+// ============================================================
+// Seeed XIAO ESP32-S3 - Compact dual-core headless miner
+// Ultra-compact form factor (22x26.5mm), USB-C, 16MB flash
+// ============================================================
+#elif defined(SEEED_XIAO_ESP32S3)
+    #define BOARD_NAME "Seeed XIAO ESP32-S3"
+
+    #ifndef USE_DISPLAY
+        #define USE_DISPLAY 0
+    #endif
+    #ifndef USE_OLED_DISPLAY
+        #define USE_OLED_DISPLAY 0
+    #endif
+    #ifndef USE_EINK_DISPLAY
+        #define USE_EINK_DISPLAY 0
+    #endif
+
+    // No built-in LED (XIAO boards are minimal)
+    #define USE_LED_STATUS 0
+
+    // NO BUTTON on XIAO - GPIO0 is BOOT button, cannot be used for app purposes
+    #define BUTTON_PIN -1
 
     // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
 

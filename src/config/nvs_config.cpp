@@ -475,6 +475,12 @@ bool nvs_config_load(miner_config_t *config) {
         return false;
     }
 
+    if (!s_prefs.isKey(NVS_KEY_CONFIG)) {
+        Serial.println("[NVS] No saved config found (first boot or erased)");
+        s_prefs.end();
+        return false;
+    }
+
     size_t len = s_prefs.getBytesLength(NVS_KEY_CONFIG);
     if (len == 0) {
         Serial.println("[NVS] No saved config found (first boot or erased)");
@@ -626,6 +632,12 @@ static uint32_t calculateStatsChecksum(const mining_persistence_t *stats) {
 bool nvs_stats_load(mining_persistence_t *stats) {
     if (!s_prefs.begin(NVS_NAMESPACE, true)) {  // Read-only
         Serial.println("[NVS-STATS] Failed to open namespace");
+        return false;
+    }
+
+    if (!s_prefs.isKey(NVS_KEY_STATS)) {
+        // Expected on first boot before any stats persistence.
+        s_prefs.end();
         return false;
     }
 

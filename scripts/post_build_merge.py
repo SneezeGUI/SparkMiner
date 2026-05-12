@@ -88,6 +88,8 @@ def get_friendly_name(env_name):
         'lilygo-t-display-s3': 'lilygo-t-display-s3',
         'lilygo-t-display-v1': 'lilygo-t-display-v1',
         'esp32-headless-led': 'esp32-headless-led',
+        'seeed-xiao-esp32s3': 'seeed-xiao-esp32s3',
+        'seeed-xiao-esp32s3-safe': 'seeed-xiao-esp32s3-safe',
     }
     return friendly_names.get(env_name, env_name)
 
@@ -131,6 +133,17 @@ def create_merged_firmware(source, target, env):
         print(f"Firmware: {update_file.name}")
     except Exception as e:
         print(f"Error creating firmware file: {e}")
+        return
+
+    # Guard: XIAO S3 must use PlatformIO upload flow with explicit image offsets.
+    # Do not generate/refresh factory-merged images for this board until merge layout is verified.
+    if env_name in ("seeed-xiao-esp32s3", "seeed-xiao-esp32s3-safe"):
+        if factory_file.exists():
+            try:
+                factory_file.unlink()
+            except Exception:
+                pass
+        print("Factory: SKIPPED for XIAO S3 (use pio run -t upload, not merged factory image)")
         return
 
     # Create factory file (merged)

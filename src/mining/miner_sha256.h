@@ -18,6 +18,18 @@
 extern "C" {
 #endif
 
+// Precomputed first-tail schedule data for nonce hot loop.
+// Built once per job/template and reused across nonce iterations.
+typedef struct {
+	uint32_t w0;
+	uint32_t w1;
+	uint32_t w2;
+	uint32_t w16;
+	uint32_t w17;
+	uint32_t s1_w16;
+	uint32_t s1_w17;
+} sha256_tail_schedule_cache_t;
+
 /**
  * Standard SHA-256 hash
  * Output is byte-swapped for little-endian comparison
@@ -38,6 +50,23 @@ void miner_sha256(sha256_hash_t *ctx, uint8_t *msg, size_t len);
 void miner_sha256_midstate(sha256_hash_t *ctx, block_header_t *hb);
 
 /**
+ * Complete Bitcoin double SHA-256 from a precomputed midstate.
+ * This always computes full outputs (no early reject) and is intended for
+ * deterministic validation of midstate correctness.
+ *
+ * @param midpoint   Midstate from miner_sha256_midstate()
+ * @param hb         Full 80-byte header
+ * @param firstOut   First SHA-256 digest (32 bytes)
+ * @param secondOut  Double SHA-256 digest (32 bytes)
+ */
+void miner_sha256_complete_from_midstate(
+	const sha256_hash_t *midpoint,
+	const block_header_t *hb,
+	sha256_hash_t *firstOut,
+	sha256_hash_t *secondOut
+);
+
+/**
  * Complete double SHA-256 using pre-computed midstate
  * Hashes tail (last 16 bytes + nonce) and performs double hash
  * Includes early 16-bit reject optimization
@@ -48,6 +77,48 @@ void miner_sha256_midstate(sha256_hash_t *ctx, block_header_t *hb);
  * @return true if hash passes 16-bit check (potential share), false otherwise
  */
 bool miner_sha256_header(sha256_hash_t *midpoint, sha256_hash_t *ctx, block_header_t *hb);
+
+/**
+ * Build per-job cache for the first SHA tail schedule.
+ * Call once after loading a new block header template.
+ */
+void miner_sha256_prepare_tail_schedule(
+	sha256_tail_schedule_cache_t *cache,
+	const block_header_t *hb
+);
+
+/**
+ * Complete Bitcoin double SHA-256 using a precomputed tail schedule cache.
+ *
+ * @param midpoint   Midstate from miner_sha256_midstate()
+ * @param cache      Per-job precomputed tail schedule cache
+ * @param nonce      Native-endian nonce value to hash
+ * @param firstOut   Optional first SHA-256 digest output
+ * @param secondOut  Optional second SHA-256 digest output
+ */
+void miner_sha256_complete_from_midstate_prepared(
+	const sha256_hash_t *midpoint,
+	const sha256_tail_schedule_cache_t *cache,
+	uint32_t nonce,
+	sha256_hash_t *firstOut,
+	sha256_hash_t *secondOut
+);
+
+/**
+ * Hot-loop helper using precomputed tail schedule cache.
+ *
+ * @param midpoint Midstate from miner_sha256_midstate()
+ * @param cache    Per-job precomputed tail schedule cache
+ * @param nonce    Native-endian nonce value to hash
+ * @param ctx      Output final hash result
+ * @return true if hash passes early 16-bit prefilter
+ */
+bool miner_sha256_header_prepared(
+	const sha256_hash_t *midpoint,
+	const sha256_tail_schedule_cache_t *cache,
+	uint32_t nonce,
+	sha256_hash_t *ctx
+);
 
 #ifdef __cplusplus
 }

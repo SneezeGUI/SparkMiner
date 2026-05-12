@@ -77,11 +77,11 @@ static bool s_inverted = false;
 
 static String formatHashrateCompact(double hashrate) {
     if (hashrate >= 1e9) {
-        return String(hashrate / 1e9, 1) + "G";
+        return String(hashrate / 1e9, 1) + " G";
     } else if (hashrate >= 1e6) {
-        return String(hashrate / 1e6, 1) + "M";
+        return String(hashrate / 1e6, 1) + " M";
     } else if (hashrate >= 1e3) {
-        return String(hashrate / 1e3, 1) + "K";
+        return String(hashrate / 1e3, 1) + " K";
     } else {
         return String((int)hashrate);
     }
@@ -111,7 +111,16 @@ static String formatDiffCompact(double diff) {
     } else if (diff >= 1e3) {
         return String(diff / 1e3, 1) + "K";
     } else {
-        return String((int)diff);
+        if (diff >= 1.0) {
+            return String(diff, 2);
+        } else if (diff >= 0.1) {
+            return String(diff, 3);
+        } else if (diff >= 0.01) {
+            return String(diff, 4);
+        } else if (diff >= 0.001) {
+            return String(diff, 5);
+        }
+        return String(diff, 6);
     }
 }
 
@@ -147,15 +156,9 @@ static void drawMainScreen(const display_data_t *data) {
     // Separator line
     s_u8g2.drawHLine(0, 10, OLED_WIDTH);
 
-    // Large hashrate display
-    s_u8g2.setFont(u8g2_font_logisoso16_tn);  // Large numeric font
-    String hashrate = formatHashrateCompact(data->hashRate);
+    String hashrate = formatHashrateCompact(data->hashRate) + "H/s";
     int hrWidth = s_u8g2.getStrWidth(hashrate.c_str());
     s_u8g2.drawStr((OLED_WIDTH - hrWidth) / 2, 32, hashrate.c_str());
-
-    // "H/s" label below
-    s_u8g2.setFont(u8g2_font_6x10_tf);
-    s_u8g2.drawStr((OLED_WIDTH - 18) / 2, 42, "H/s");
 
     // Bottom stats row
     #if (OLED_HEIGHT == 64)

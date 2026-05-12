@@ -106,13 +106,13 @@ static bool s_inverted = false;
 
 static String formatHashrateCompact(double hashrate) {
     if (hashrate >= 1e9) {
-        return String(hashrate / 1e9, 1) + "G";
+        return String(hashrate / 1e9, 1) + " G";
     } else if (hashrate >= 1e6) {
-        return String(hashrate / 1e6, 1) + "M";
+        return String(hashrate / 1e6, 1) + " M";
     } else if (hashrate >= 1e3) {
-        return String(hashrate / 1e3, 1) + "K";
+        return String(hashrate / 1e3, 1) + " K";
     } else {
-        return String((int)hashrate);
+        return String((int)hashrate) + " ";
     }
 }
 
