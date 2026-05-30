@@ -370,8 +370,36 @@ bool IRAM_ATTR sha256_ll_double_hash_full(const uint8_t *header, uint32_t nonce,
 
     return ll_read_digest_if(hash_out);
 #else
-    // For other ESP32 variants, use the existing implementation
-    return false;
+    // ESP32-S2/S3/C3: full double SHA-256 with NO external midstate injection.
+    // These chips' SHA engine ignores SHA_H writes on CONTINUE, so the cached-
+    // midstate path in sha256_ll_double_hash() silently computes the wrong hash
+    // (the root cause of the zero-shares bug, issues #34/#28/#10/#5). This path
+    // re-hashes block 1 on every call (no midstate caching) but uses only the
+    // legitimate START -> CONTINUE flow, which is correct on every variant.
+    uint32_t *reg = (uint32_t *)(SHA_TEXT_BASE);
+    uint32_t *hdr_words = (uint32_t *)header;
+
+    // First SHA, block 1: first 64 header bytes (fresh START)
+    for (int i = 0; i < 16; i++) {
+        REG_WRITE(&reg[i], hdr_words[i]);
+    }
+    REG_WRITE(SHA_MODE_REG, SHA2_256);
+    REG_WRITE(SHA_START_REG, 1);
+    sha256_ll_wait_idle();
+
+    // First SHA, block 2: last 16 header bytes + nonce + padding (CONTINUE)
+    ll_fill_second_block(header + 64, nonce);
+    REG_WRITE(SHA_MODE_REG, SHA2_256);
+    REG_WRITE(SHA_CONTINUE_REG, 1);
+    sha256_ll_wait_idle();
+
+    // Second SHA: hash of the 32-byte first digest (fresh START)
+    ll_fill_inter_block();  // copy SHA_H -> SHA_TEXT[0..7] and append padding
+    REG_WRITE(SHA_MODE_REG, SHA2_256);
+    REG_WRITE(SHA_START_REG, 1);
+    sha256_ll_wait_idle();
+
+    return ll_read_digest_if(hash_out);
 #endif
 }
 
