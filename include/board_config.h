@@ -396,6 +396,44 @@
     // Defined in platformio.ini via -D USE_HARDWARE_SHA=1
 
 // ============================================================
+// Generic ESP32 DevKit / WROOM with SSD1306 OLED (Issue #26)
+// Standard ESP32 I2C pins; classic Xtensa pipelined SHA (~715 KH/s)
+// ============================================================
+#elif defined(ESP32_DEVKIT_OLED)
+    #define BOARD_NAME "ESP32-DevKit-OLED"
+
+    // Use OLED display (not TFT)
+    #define USE_DISPLAY 0
+    #define USE_OLED_DISPLAY 1
+
+    // OLED configuration (128x64 SSD1306 I2C, standard ESP32 I2C pins).
+    // Guarded so platformio.ini build flags can override per-board wiring.
+    #ifndef OLED_WIDTH
+        #define OLED_WIDTH 128
+    #endif
+    #ifndef OLED_HEIGHT
+        #define OLED_HEIGHT 64
+    #endif
+    #ifndef OLED_SDA_PIN
+        #define OLED_SDA_PIN 21
+    #endif
+    #ifndef OLED_SCL_PIN
+        #define OLED_SCL_PIN 22
+    #endif
+    #ifndef OLED_I2C_ADDR
+        #define OLED_I2C_ADDR 0x3C
+    #endif
+
+    #ifndef BUTTON_PIN
+        #define BUTTON_PIN 0
+    #endif
+    #define BUTTON_ACTIVE_LOW 1
+
+    // SHA Implementation: classic ESP32 pipelined Xtensa ASM auto-selected via
+    // CONFIG_IDF_TARGET_ESP32 (USE_HARDWARE_SHA in platformio.ini is cosmetic here)
+
+
+// ============================================================
 // Default - Generic ESP32
 // ============================================================
 #else
