@@ -151,6 +151,7 @@ Find your board below and download the matching firmware from [Releases](https:/
 | **ESP32-WROOM-32** | `esp32-headless_firmware.bin` | Headless — GPIO LED on pin 2 |
 | **Wemos Lolin32 + OLED** | `wemos-lolin32-oled_firmware.bin` | 128x64 SSD1306 I2C (SDA=5, SCL=4, RST=16, addr=0x3C) |
 | **NodeMCU ESP32** | `esp32-headless_firmware.bin` | Use headless firmware |
+| **ESP32 DevKit + SSD1306 OLED** | `esp32-devkit-oled_firmware.bin` | 128x64 I2C OLED (SDA=GPIO21, SCL=GPIO22, addr=0x3C) |
 
 ### File Types
 
