@@ -562,18 +562,21 @@ void setupTasks() {
 
             Serial.println("[INIT] All tasks created (dual-core mining)");
         #else
-            // Single-core (C3, S2): Run only one miner task, not pinned
-            // Must yield frequently to let WiFi/Stratum work
+            // Single-core (C3, S2): one HARDWARE-SHA miner task, not pinned.
+            // Uses the full double-hash HW path (sha256_ll_double_hash_full); the
+            // midstate-restore path is unsupported on these chips (issue #34). Runs at
+            // low priority and yields frequently so WiFi/Stratum/Monitor stay alive on
+            // the single shared core.
             xTaskCreate(
-                miner_task_core0,
+                miner_task_core1,
                 "Miner",
-                MINER_0_STACK,
+                MINER_1_STACK,
                 NULL,
                 MINER_0_PRIORITY,
-                &miner0Task
+                &miner1Task
             );
 
-            Serial.println("[INIT] All tasks created (single-core mining)");
+            Serial.println("[INIT] All tasks created (single-core HW-SHA mining)");
         #endif
     } else {
         Serial.println("[INIT] Monitor task created (mining disabled - no wallet)");

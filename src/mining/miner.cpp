@@ -894,22 +894,25 @@ void miner_task_core1(void *param) {
 // Fallback for ESP32-C3/S2: Use sequential HAL-based mining with Midstate Optimization
 
 void miner_task_core1(void *param) {
-    block_header_t hb;
-    sha256_hash_t ctx;
+    block_header_t hb;          // unswapped header (nonce source + software verify)
+    sha256_hash_t hwHash;       // hardware double-SHA result
+    sha256_hash_t swHash;       // software re-hash for verification
+    sha256_hash_t sw_midstate;  // software midstate for verification
     char jobId[MAX_JOB_ID_LEN];
     uint32_t minerId = 1;
 
-    Serial.printf("[MINER1] Started on core %d (Hardware SHA Midstate, priority %d)\n",
+    Serial.printf("[MINER1] Started on core %d (HW SHA full double-hash, priority %d)\n",
                   xPortGetCoreID(), uxTaskPriorityGet(NULL));
 
     // Wait for first job
     while (!s_miningActive) {
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
-    Serial.println("[MINER1] Got first job, starting mining loop");
+    Serial.println("[MINER1] Got first job, starting HW SHA mining loop");
 
     while (true) {
         if (!s_miningActive) {
+            s_core1Mining = false;
             vTaskDelay(100 / portTICK_PERIOD_MS);
             continue;
         }
@@ -922,50 +925,53 @@ void miner_task_core1(void *param) {
         strncpy(jobId, s_currentJobId, MAX_JOB_ID_LEN);
         xSemaphoreGive(s_jobMutex);
 
-        // Create swapped header for hardware SHA
+        // Byte-swapped header (big-endian words) for the hardware SHA engine
         uint32_t header_swapped[20];
         uint32_t *header_words = (uint32_t *)&hb;
         for (int i = 0; i < 20; i++) {
             header_swapped[i] = __builtin_bswap32(header_words[i]);
         }
+        const uint8_t *header_bytes = (const uint8_t *)header_swapped;
 
-        // Set starting nonce for this core
+        // Software midstate on the UNSWAPPED header, used to re-verify candidates
+        miner_sha256_midstate(&sw_midstate, &hb);
+
         hb.nonce = s_startNonce[minerId];
 
-        // Prepare midstate variables
-        uint32_t midstate[8];
-        uint8_t *header_bytes = (uint8_t *)header_swapped;
-
-        // Acquire hardware SHA lock for this mining burst
         sha256_ll_acquire();
 
-        // Compute midstate once for the block
-        sha256_ll_midstate(midstate, header_bytes);
-
+        uint32_t yieldCounter = 0;
         while (s_miningActive) {
-            // Optimized midstate mining
-            // Uses pre-computed midstate and only hashes the tail (last 16 bytes + padding)
-            // header_bytes[64] is the start of the 2nd chunk (tail)
-            if (sha256_ll_double_hash(midstate, &header_bytes[64], hb.nonce, ctx.bytes)) {
-                hashCheck(jobId, &ctx, hb.timestamp, hb.nonce);
+            // Full hardware double-SHA256. Re-hashes block 1 every nonce (no midstate
+            // restore -- that is unsupported on S2/S3/C3, issue #34) but is correct.
+            if (sha256_ll_double_hash_full(header_bytes, hb.nonce, hwHash.bytes)) {
+                // The raw-register HW path is not yet hardware-verified on these chips,
+                // so re-hash in software (the proven BitsyMiner path) before submitting.
+                // This gate guarantees a wrong HW hash can never become a bad share.
+                bool swVerified = miner_sha256_header(&sw_midstate, &swHash, &hb);
+                #if defined(DEBUG_SHARE_VALIDATION)
+                Serial.printf("[HW-DBG] candidate nonce=%08lx SW verify=%s hash[28-31]=%02x%02x%02x%02x\n",
+                              (unsigned long)hb.nonce, swVerified ? "PASS" : "FAIL",
+                              swHash.bytes[28], swHash.bytes[29], swHash.bytes[30], swHash.bytes[31]);
+                #endif
+                if (swVerified) {
+                    hashCheck(jobId, &swHash, hb.timestamp, hb.nonce);
+                }
             }
 
             hb.nonce++;
             s_stats.hashes++;
+            s_core1Hashes++;
 
-            // Yield periodically to prevent WDT (every ~1M nonces)
-            if ((hb.nonce & 0xFFFFF) == 0) {
+            // Single shared core: yield often so WiFi/Stratum/Monitor stay responsive.
+            if ((++yieldCounter & 0x7FF) == 0) {
                 sha256_ll_release();
                 vTaskDelay(1);
                 sha256_ll_acquire();
-                // Recompute midstate after yield just in case hardware state was lost (unlikely but safe)
-                sha256_ll_midstate(midstate, header_bytes);
             }
         }
 
-        // Release hardware SHA lock
         sha256_ll_release();
-
         s_core1Mining = false;
         vTaskDelay(20 / portTICK_PERIOD_MS);
     }
