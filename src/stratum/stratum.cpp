@@ -12,6 +12,7 @@
 #include <board_config.h>
 #include "stratum.h"
 #include "../mining/miner.h"
+#include "../config/nvs_config.h"  // WiFi credentials for explicit reconnect (Issue #31)
 
 // ============================================================ 
 // Constants
@@ -542,7 +543,17 @@ void stratum_task(void *param) {
                 s_lastWifiReconnectAttempt = millis();
                 Serial.printf("[WIFI] Reconnect attempt %lu (backoff: %lums)\n",
                               s_wifiReconnectAttempts, backoffMs);
-                WiFi.reconnect();
+                // Issue #31: WiFi.reconnect() reuses the SDK's cached credentials,
+                // which are dropped after an AP reboot / AUTH_EXPIRE, so it can fail
+                // forever and force a power cycle. Re-issue begin() with the SSID/PSK
+                // stored in NVS so reconnection survives those cases.
+                miner_config_t *cfg = nvs_config_get();
+                if (cfg && cfg->ssid[0]) {
+                    WiFi.disconnect(false);  // drop association, keep stored config
+                    WiFi.begin(cfg->ssid, cfg->wifiPassword);
+                } else {
+                    WiFi.reconnect();
+                }
             }
 
             vTaskDelay(500 / portTICK_PERIOD_MS);

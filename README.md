@@ -263,6 +263,10 @@ If no SD card config is found, SparkMiner creates a WiFi access point:
 
 1. **Connect** to WiFi network: `SparkMiner-XXXX` (password: minebitcoin)
 2. **Open browser** to `http://192.168.4.1`
+   > **macOS users:** if the captive-portal page doesn't pop up automatically and
+   > Safari/Chrome shows `ERR_INTERNET_DISCONNECTED`, type the IP address
+   > `http://192.168.4.1` directly into the address bar (not a search term). The
+   > config page is served only by the device while it has no internet access. (Issue #29)
 3. You will see the **new dark-themed portal** with full configuration options:
     - Primary & Backup Pool settings
     - Display brightness, rotation, and color inversion
