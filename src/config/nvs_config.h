@@ -34,7 +34,7 @@ typedef struct {
 
     // Display settings
     uint8_t brightness;
-    uint16_t screenTimeout;
+    uint8_t screenTimeout;
     uint8_t rotation;       // Screen rotation (0-3)
     bool displayEnabled;
     bool invertColors;      // Invert display colors

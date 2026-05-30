@@ -17,7 +17,7 @@
 
 // Update intervals
 #define DISPLAY_UPDATE_MS   1000    // 1 second
-#define STATS_UPDATE_MS     10000   // 10 seconds
+#define STATS_UPDATE_MS     60000   // 60 seconds; keep network stats from disturbing mining
 #define PERSIST_STATS_MS    3600000 // 1 hour - save to flash for persistence
 #define EARLY_SAVE_MS       300000  // 5 minutes - initial save interval before first hourly
 #define LED_UPDATE_MS       50      // 50ms for smooth LED animations
@@ -200,7 +200,7 @@ void monitor_init() {
     s_lastActivityTime = millis();
     s_initialized = true;
 
-    Serial.printf("[MONITOR] Initialized (screen_timeout=%us)\n", config->screenTimeout);
+    Serial.println("[MONITOR] Initialized");
 }
 
 void monitor_reset_activity() {
@@ -242,11 +242,7 @@ void monitor_task(void *param) {
                 {
                     miner_config_t *cfg = nvs_config_get();
                     if (cfg->screenTimeout > 0 && !display_is_backlight_off()) {
-                        uint32_t elapsed = now - s_lastActivityTime;
-                        uint32_t timeoutMs = (uint32_t)cfg->screenTimeout * 1000;
-                        if (elapsed >= timeoutMs) {
-                            Serial.printf("[MONITOR] Screen timeout after %lus (timeout=%us)\n",
-                                          elapsed / 1000, cfg->screenTimeout);
+                        if (now - s_lastActivityTime >= (uint32_t)cfg->screenTimeout * 1000) {
                             display_set_backlight_off();
                         }
                     }

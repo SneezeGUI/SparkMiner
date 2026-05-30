@@ -354,48 +354,6 @@
     // SHA Implementation: Defined in platformio.ini (USE_HARDWARE_SHA=1)
 
 // ============================================================
-// Wemos Lolin32 + OLED Display
-// Verified wiring:
-//   SDA=GPIO5, SCL=GPIO4, RST=GPIO16, ADDR=0x3C
-// ============================================================
-#elif defined(WEMOS_LOLIN32_OLED)
-    #define BOARD_NAME "Wemos-Lolin32-OLED"
-
-    #define USE_DISPLAY 0
-    #define USE_OLED_DISPLAY 1
-
-    #ifndef OLED_WIDTH
-        #define OLED_WIDTH 128
-    #endif
-    #ifndef OLED_HEIGHT
-        #define OLED_HEIGHT 64
-    #endif
-    #ifndef OLED_SDA_PIN
-        #define OLED_SDA_PIN 5
-    #endif
-    #ifndef OLED_SCL_PIN
-        #define OLED_SCL_PIN 4
-    #endif
-    #ifndef OLED_I2C_ADDR
-        #define OLED_I2C_ADDR 0x3C
-    #endif
-    #ifndef OLED_I2C_RST
-        #define OLED_I2C_RST 16
-    #endif
-
-    #define USE_LED_STATUS 1
-    #define GPIO_LED_PIN 2
-    #define GPIO_LED_ACTIVE_LOW 0
-
-    #ifndef BUTTON_PIN
-        #define BUTTON_PIN 0
-    #endif
-    #define BUTTON_ACTIVE_LOW 1
-
-    // SHA Implementation: classic ESP32 hardware SHA peripheral
-    // Defined in platformio.ini via -D USE_HARDWARE_SHA=1
-
-// ============================================================
 // Default - Generic ESP32
 // ============================================================
 #else
@@ -439,7 +397,9 @@
 
 // Stratum task
 #define STRATUM_CORE        CORE_0
-#define STRATUM_PRIORITY    2
+#ifndef STRATUM_PRIORITY
+    #define STRATUM_PRIORITY 4
+#endif
 #define STRATUM_STACK       12288
 
 // Monitor/Display task

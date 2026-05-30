@@ -268,10 +268,17 @@ void miner_sha256_midstate(sha256_hash_t *ctx, block_header_t *hb) {
     ctx->hash[7] += h;
 }
 
-bool miner_sha256_header(sha256_hash_t *midpoint, sha256_hash_t *ctx, block_header_t *hb) {
+static bool IRAM_ATTR miner_sha256_header_words(
+    sha256_hash_t *midpoint,
+    sha256_hash_t *ctx,
+    WORD tail0_be,
+    WORD tail1_be,
+    WORD tail2_be,
+    WORD nonce_be
+) {
     sha256_hash_t tmp;
     WORD temp1, temp2;
-    uint8_t *data = (uint8_t *)hb;
+    uint8_t *data;
     int i, j;
 
     WORD WA[8] = {
@@ -291,7 +298,10 @@ bool miner_sha256_header(sha256_hash_t *midpoint, sha256_hash_t *ctx, block_head
     // w[5..14] = 0
     // w[15] = 0x00000280 (640 bits = 80 bytes in big-endian)
     WORD w[64] = {
-        GET_DATA(data, 64), GET_DATA(data, 68), GET_DATA(data, 72), GET_DATA(data, 76),
+        tail0_be,
+        tail1_be,
+        tail2_be,
+        nonce_be,
         0x80000000,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0x00000280
@@ -508,4 +518,34 @@ bool miner_sha256_header(sha256_hash_t *midpoint, sha256_hash_t *ctx, block_head
     ctx->hash[7] = BYTESWAP32(ctx->hash[7]);
 
     return true;
+}
+
+bool IRAM_ATTR miner_sha256_header_nonce(
+    sha256_hash_t *midpoint,
+    sha256_hash_t *ctx,
+    uint32_t tail0_be,
+    uint32_t tail1_be,
+    uint32_t tail2_be,
+    uint32_t nonce
+) {
+    return miner_sha256_header_words(
+        midpoint,
+        ctx,
+        tail0_be,
+        tail1_be,
+        tail2_be,
+        BYTESWAP32(nonce)
+    );
+}
+
+bool IRAM_ATTR miner_sha256_header(sha256_hash_t *midpoint, sha256_hash_t *ctx, block_header_t *hb) {
+    const uint32_t *header_words = (const uint32_t *)hb;
+    return miner_sha256_header_words(
+        midpoint,
+        ctx,
+        BYTESWAP32(header_words[16]),
+        BYTESWAP32(header_words[17]),
+        BYTESWAP32(header_words[18]),
+        BYTESWAP32(header_words[19])
+    );
 }

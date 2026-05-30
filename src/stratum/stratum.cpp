@@ -18,8 +18,11 @@
 // ============================================================ 
 #define STRATUM_MSG_BUFFER  512
 #define RESPONSE_TIMEOUT_MS 3000
-#define KEEPALIVE_MS        120000
 #define INACTIVITY_MS       700000
+#define SESSION_REFRESH_MS  3000000   // 50 minutes: refresh pool authorization before dashboards expire workers
+#define MAX_INFLIGHT_SUBMISSIONS 4
+#define MAX_SUBMISSIONS_PER_LOOP 2
+#define SUBMIT_STALL_MS     15000
 
 // ============================================================ 
 // Global State
@@ -42,6 +45,8 @@ static char s_authorizedWorkerName[MAX_WALLET_LEN + 34] = {0};
 static uint32_t s_messageId = 1;
 static uint32_t s_lastActivity = 0;
 static uint32_t s_lastSubmit = 0;
+static uint32_t s_connectedAt = 0;
+static uint8_t s_consecutiveSubmitTimeouts = 0;
 
 // WiFi reconnection state (Issue #4 fix)
 static uint32_t s_wifiReconnectAttempts = 0;
@@ -53,6 +58,60 @@ static int s_extraNonce2Size = 4;
 
 // JSON document for parsing
 static StaticJsonDocument<4096> s_doc;
+
+static uint16_t countPendingResponses() {
+    uint16_t count = 0;
+    for (int i = 0; i < MAX_PENDING_SUBMISSIONS; i++) {
+        if (s_pendingResponses[i].msgId != 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static uint32_t oldestPendingAgeMs() {
+    uint32_t now = millis();
+    uint32_t oldestAge = 0;
+    for (int i = 0; i < MAX_PENDING_SUBMISSIONS; i++) {
+        if (s_pendingResponses[i].msgId != 0) {
+            uint32_t age = now - s_pendingResponses[i].sentTime;
+            if (age > oldestAge) {
+                oldestAge = age;
+            }
+        }
+    }
+    return oldestAge;
+}
+
+static uint8_t expireStalledPendingResponses() {
+    uint32_t now = millis();
+    uint8_t expired = 0;
+    for (int i = 0; i < MAX_PENDING_SUBMISSIONS; i++) {
+        if (s_pendingResponses[i].msgId != 0 &&
+            now - s_pendingResponses[i].sentTime > SUBMIT_STALL_MS) {
+            Serial.printf("[STRATUM] Share response timeout: id=%lu job=%s diff=%.4f age=%lums\n",
+                          s_pendingResponses[i].msgId,
+                          s_pendingResponses[i].jobId,
+                          s_pendingResponses[i].difficulty,
+                          now - s_pendingResponses[i].sentTime);
+            s_pendingResponses[i].msgId = 0;
+            if (s_consecutiveSubmitTimeouts < 255) {
+                s_consecutiveSubmitTimeouts++;
+            }
+            expired++;
+        }
+    }
+    return expired;
+}
+
+static void clearSubmissions() {
+    memset(s_pendingResponses, 0, sizeof(s_pendingResponses));
+    s_pendingIndex = 0;
+    s_consecutiveSubmitTimeouts = 0;
+    if (s_submitQueue) {
+        xQueueReset(s_submitQueue);
+    }
+}
 
 // ============================================================ 
 // Utility Functions
@@ -209,16 +268,8 @@ static void parseMiningNotify(const String &line) {
 
     if (p0) strncpy(job.jobId, p0, STRATUM_JOB_ID_LEN - 1);
     if (p1) strncpy(job.prevHash, p1, STRATUM_PREVHASH_LEN - 1);
-    if (p2) {
-        strncpy(job.coinBase1, p2, STRATUM_COINBASE1_LEN - 1);
-        if (strlen(p2) >= STRATUM_COINBASE1_LEN)
-            Serial.printf("[STRATUM] WARNING: coinBase1 truncated (%d chars, max %d)\n", strlen(p2), STRATUM_COINBASE1_LEN - 1);
-    }
-    if (p3) {
-        strncpy(job.coinBase2, p3, STRATUM_COINBASE2_LEN - 1);
-        if (strlen(p3) >= STRATUM_COINBASE2_LEN)
-            Serial.printf("[STRATUM] WARNING: coinBase2 truncated (%d chars, max %d)\n", strlen(p3), STRATUM_COINBASE2_LEN - 1);
-    }
+    if (p2) strncpy(job.coinBase1, p2, STRATUM_COINBASE1_LEN - 1);
+    if (p3) strncpy(job.coinBase2, p3, STRATUM_COINBASE2_LEN - 1);
     if (p5) strncpy(job.version, p5, STRATUM_FIELD_LEN - 1);
     if (p6) strncpy(job.nbits, p6, STRATUM_FIELD_LEN - 1);
     if (p7) strncpy(job.ntime, p7, STRATUM_FIELD_LEN - 1);
@@ -269,6 +320,8 @@ static void handleServerMessage(WiFiClient &client) {
         return;
     }
 
+    s_lastActivity = millis();
+
     // Check for submission responses
     if (s_doc.containsKey("id") && s_doc.containsKey("result")) {
         uint32_t msgId = s_doc["id"];
@@ -284,13 +337,28 @@ static void handleServerMessage(WiFiClient &client) {
                 stats->avgLatency = (stats->avgLatency == 0) ? latency : ((stats->avgLatency * 9 + latency) / 10);
 
                 if (accepted) {
+                    s_consecutiveSubmitTimeouts = 0;
                     stats->accepted++;
-                    dbg("[STRATUM] Share accepted!\n");
+                    stats->shares++;  // FIX: count shares ONLY when pool accepts
+                    Serial.printf("[STRATUM] Share accepted: id=%lu job=%s diff=%.4f latency=%lu ms | accepted=%lu rejected=%lu\n",
+                                  msgId,
+                                  s_pendingResponses[i].jobId,
+                                  s_pendingResponses[i].difficulty,
+                                  latency,
+                                  stats->accepted,
+                                  stats->rejected);
                 } else {
+                    s_consecutiveSubmitTimeouts = 0;
                     stats->rejected++;
                     const char *reason = s_doc["error"][1] | "unknown";
                     dbg("[STRATUM] Share rejected: %s\n", reason);
-                    Serial.printf("[STRATUM] Share rejected: %s\n", reason);
+                    Serial.printf("[STRATUM] Share rejected: id=%lu job=%s diff=%.4f reason=%s | accepted=%lu rejected=%lu\n",
+                                  msgId,
+                                  s_pendingResponses[i].jobId,
+                                  s_pendingResponses[i].difficulty,
+                                  reason,
+                                  stats->accepted,
+                                  stats->rejected);
                 }
 
                 // Call callback if set
@@ -479,8 +547,10 @@ static void submitShare(WiFiClient &client, const submit_entry_t *entry) {
         timestamp,
         nonce);
 
-    Serial.printf("[STRATUM] Submit: job=%s en2=%s time=%s nonce=%s\n",
-        entry->jobId, entry->extraNonce2, timestamp, nonce);
+    #if defined(DEBUG_SHARE_VALIDATION)
+    Serial.printf("[STRATUM] Submit: job=%s en2=%s time=%s nonce=%s diff=%.4f\n",
+        entry->jobId, entry->extraNonce2, timestamp, nonce, entry->difficulty);
+    #endif
 
     if (sendMessage(client, msg)) {
         // Store in pending responses for latency tracking
@@ -492,7 +562,11 @@ static void submitShare(WiFiClient &client, const submit_entry_t *entry) {
         s_pendingIndex = (s_pendingIndex + 1) % MAX_PENDING_SUBMISSIONS;
 
         s_lastSubmit = millis();
-        miner_get_stats()->shares++;
+        Serial.printf("[STRATUM] Share submitted: id=%lu job=%s diff=%.4f\n",
+                      msgId, entry->jobId, entry->difficulty);
+        // FIX: shares counted only on pool acceptance (see handleServerMessage)
+    } else {
+        Serial.println("[STRATUM] Submit failed: client not connected");
     }
 }
 
@@ -529,6 +603,7 @@ void stratum_task(void *param) {
             if (s_isConnected) {
                 miner_stop();
                 client.stop();
+                clearSubmissions();
                 s_isConnected = false;
                 Serial.println("[WIFI] Connection lost, attempting reconnect...");
             }
@@ -572,6 +647,7 @@ void stratum_task(void *param) {
         if (s_reconnectRequested) {
             miner_stop();
             client.stop();
+            clearSubmissions();
             s_isConnected = false;
             s_reconnectRequested = false;
             vTaskDelay(100 / portTICK_PERIOD_MS);
@@ -582,6 +658,7 @@ void stratum_task(void *param) {
         if (!client.connected()) {
             if (s_isConnected) {
                 miner_stop();
+                clearSubmissions();
                 s_isConnected = false;
             }
 
@@ -593,8 +670,10 @@ void stratum_task(void *param) {
             // STABILITY FIX: Use connect timeout (10s) to prevent long blocks
             if (client.connect(s_primaryPool.url, s_primaryPool.port, 10000)) {
                 if (subscribe(client, s_primaryPool.wallet, s_primaryPool.password, s_primaryPool.workerName)) {
+                    clearSubmissions();
                     s_isConnected = true;
                     s_lastActivity = millis();
+                    s_connectedAt = millis();
                     safeStrCpy(s_currentPoolUrl, s_primaryPool.url, MAX_POOL_URL_LEN);
                     Serial.println("[STRATUM] Connected to primary pool");
                 } else {
@@ -611,10 +690,12 @@ void stratum_task(void *param) {
                     // STABILITY FIX: Use connect timeout (10s)
                     if (client.connect(s_backupPool.url, s_backupPool.port, 10000)) {
                         if (subscribe(client, s_backupPool.wallet, s_backupPool.password, s_backupPool.workerName)) {
+                            clearSubmissions();
                             s_isConnected = true;
                             usingBackup = true;
                             backupConnectTime = millis();
                             s_lastActivity = millis();
+                            s_connectedAt = millis();
                             safeStrCpy(s_currentPoolUrl, s_backupPool.url, MAX_POOL_URL_LEN);
                             Serial.println("[STRATUM] Connected to backup pool");
                         } else {
@@ -642,10 +723,14 @@ void stratum_task(void *param) {
                     // Successfully connected to primary - switch over
                     miner_stop();
                     client.stop();
+                    clearSubmissions();
                     // Use swap to safely transfer the connection instead of shallow copy
                     std::swap(client, testClient);
                     testClient.stop();  // Clean up the old (now empty) client
                     usingBackup = false;
+                    s_isConnected = true;
+                    s_lastActivity = millis();
+                    s_connectedAt = millis();
                     safeStrCpy(s_currentPoolUrl, s_primaryPool.url, MAX_POOL_URL_LEN);
                     Serial.println("[STRATUM] Switched back to primary pool");
                     continue;
@@ -663,19 +748,41 @@ void stratum_task(void *param) {
 
         // Process submission queue
         submit_entry_t entry;
-        while (xQueueReceive(s_submitQueue, &entry, 0) == pdTRUE) {
+        uint8_t sentThisLoop = 0;
+        while (countPendingResponses() < MAX_INFLIGHT_SUBMISSIONS &&
+               sentThisLoop < MAX_SUBMISSIONS_PER_LOOP &&
+               xQueueReceive(s_submitQueue, &entry, 0) == pdTRUE) {
             submitShare(client, &entry);
+            sentThisLoop++;
+
+            while (client.available() > 0) {
+                handleServerMessage(client);
+            }
         }
 
-        // Send keepalive if idle
-        if (millis() - s_lastSubmit > KEEPALIVE_MS) {
-            char msg[STRATUM_MSG_BUFFER];
-            uint32_t keepId = getNextId();
-            snprintf(msg, sizeof(msg),
-                "{\"id\":%lu,\"method\":\"mining.suggest_difficulty\",\"params\":[%.10g]}",
-                keepId, DESIRED_DIFFICULTY);
-            sendMessage(client, msg);
-            s_lastSubmit = millis();
+        expireStalledPendingResponses();
+        if (s_consecutiveSubmitTimeouts >= MAX_INFLIGHT_SUBMISSIONS) {
+            Serial.printf("[STRATUM] %u consecutive submit timeouts, reconnecting Stratum\n",
+                          s_consecutiveSubmitTimeouts);
+            miner_stop();
+            client.stop();
+            clearSubmissions();
+            s_isConnected = false;
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        // Some pools/dashboards expire idle-looking workers even when the TCP
+        // socket still accepts shares. Periodically re-authorize without
+        // rebooting so the worker stays visible on the pool side.
+        if (s_isConnected && millis() - s_connectedAt > SESSION_REFRESH_MS) {
+            Serial.println("[STRATUM] Session refresh interval reached, reconnecting Stratum");
+            miner_stop();
+            client.stop();
+            clearSubmissions();
+            s_isConnected = false;
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            continue;
         }
 
         // Check for inactivity
@@ -683,16 +790,17 @@ void stratum_task(void *param) {
             Serial.println("[STRATUM] Pool inactive, disconnecting");
             miner_stop();
             client.stop();
+            clearSubmissions();
             s_isConnected = false;
         }
 
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+        vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 }
 
 bool stratum_submit_share(const submit_entry_t *entry) {
     if (!s_submitQueue) return false;
-    return xQueueSend(s_submitQueue, entry, pdMS_TO_TICKS(100)) == pdTRUE;
+    return xQueueSend(s_submitQueue, entry, 0) == pdTRUE;
 }
 
 void stratum_reconnect() {

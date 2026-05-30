@@ -45,6 +45,21 @@ TaskHandle_t buttonTask = NULL;
 // Global state
 volatile bool systemReady = false;
 
+#if defined(BOOT_TEST_MINIMAL)
+void setup() {
+    Serial.begin(115200);
+    delay(1000);
+    Serial.println();
+    Serial.println("[BOOT-TEST] ESP32-S3 minimal firmware is running");
+}
+
+void loop() {
+    Serial.println("[BOOT-TEST] alive");
+    delay(1000);
+}
+
+#else
+
 // Button handling (OneButton)
 #if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
 OneButton button(BUTTON_PIN, true, true);  // active low, enable pullup
@@ -213,6 +228,41 @@ void setupTasks();
 void printBanner();
 void checkFactoryReset();
 uint32_t tryOverclock();
+void printHeadlessDiagnostics(bool force = false);
+
+static const char* wifiStatusName(wl_status_t status) {
+    switch (status) {
+        case WL_IDLE_STATUS: return "IDLE";
+        case WL_NO_SSID_AVAIL: return "NO_SSID";
+        case WL_SCAN_COMPLETED: return "SCAN_DONE";
+        case WL_CONNECTED: return "CONNECTED";
+        case WL_CONNECT_FAILED: return "CONNECT_FAILED";
+        case WL_CONNECTION_LOST: return "CONNECTION_LOST";
+        case WL_DISCONNECTED: return "DISCONNECTED";
+        default: return "UNKNOWN";
+    }
+}
+
+static void printMaskedWallet(const char *wallet) {
+    if (!wallet || wallet[0] == '\0') {
+        Serial.print("(empty)");
+        return;
+    }
+
+    size_t len = strlen(wallet);
+    if (len <= 12) {
+        Serial.print(wallet);
+        return;
+    }
+
+    for (size_t i = 0; i < 8 && i < len; i++) {
+        Serial.print(wallet[i]);
+    }
+    Serial.print("...");
+    for (size_t i = len - 4; i < len; i++) {
+        Serial.print(wallet[i]);
+    }
+}
 
 /**
  * Attempt CPU overclock using 320MHz PLL
@@ -377,6 +427,13 @@ void setup() {
 
     // Load pool configuration from NVS
     miner_config_t *config = nvs_config_get();
+    Serial.println("[CONFIG] Active configuration:");
+    Serial.printf("[CONFIG] WiFi SSID: %s\n", config->ssid[0] ? config->ssid : "(empty)");
+    Serial.printf("[CONFIG] Primary pool: %s:%d\n", config->poolUrl, config->poolPort);
+    Serial.print("[CONFIG] Wallet: ");
+    printMaskedWallet(config->wallet);
+    Serial.println();
+    Serial.printf("[CONFIG] Worker: %s\n", config->workerName[0] ? config->workerName : "(empty)");
     stratum_set_pool(config->poolUrl, config->poolPort, config->wallet, config->poolPassword, config->workerName);
     stratum_set_backup_pool(config->backupPoolUrl, config->backupPoolPort,
                            config->backupWallet, config->backupPoolPassword, config->workerName);
@@ -399,11 +456,6 @@ void setup() {
         Serial.println("[INIT] Button handlers registered (click/double/triple/long-press)");
     #endif
 
-    // Initialize WiFiManager and connect
-    wifi_manager_init();
-    Serial.println("[INIT] Starting WiFi...");
-    wifi_manager_start();
-
     // Register WiFi event handlers for diagnostics
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
         Serial.printf("[WIFI] Disconnected, reason: %d\n", info.wifi_sta_disconnected.reason);
@@ -412,6 +464,17 @@ void setup() {
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
         Serial.printf("[WIFI] Connected, channel: %d\n", WiFi.channel());
     }, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
+
+    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+        Serial.printf("[WIFI] Got IP: %s, RSSI: %d dBm\n",
+                      WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    }, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
+
+    // Initialize WiFiManager and connect
+    wifi_manager_init();
+    Serial.println("[INIT] Starting WiFi...");
+    wifi_manager_start();
+    printHeadlessDiagnostics(true);
 
     // Initialize monitor (live stats - display already initialized)
     monitor_init();
@@ -453,8 +516,60 @@ void setup() {
  */
 void loop() {
     // Button handling moved to dedicated FreeRTOS task for responsiveness during mining
+    printHeadlessDiagnostics(false);
+
     // Yield to FreeRTOS tasks
     vTaskDelay(pdMS_TO_TICKS(100));  // Main loop can sleep longer now
+}
+
+void printHeadlessDiagnostics(bool force) {
+#if !(USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
+    static uint32_t lastPrint = 0;
+    uint32_t now = millis();
+
+    if (!force && (now - lastPrint < 30000)) {
+        return;
+    }
+    lastPrint = now;
+
+    miner_config_t *config = nvs_config_get();
+    wl_status_t wifiStatus = WiFi.status();
+    const char *currentPool = stratum_get_pool();
+
+    Serial.print("[HEADLESS] WiFi=");
+    Serial.print(wifiStatusName(wifiStatus));
+    if (wifiStatus == WL_CONNECTED) {
+        Serial.print(" SSID=");
+        Serial.print(WiFi.SSID());
+        Serial.print(" IP=");
+        Serial.print(WiFi.localIP());
+        Serial.print(" RSSI=");
+        Serial.print(WiFi.RSSI());
+        Serial.print("dBm");
+    }
+
+    Serial.print(" | Pool=");
+    Serial.print(config->poolUrl);
+    Serial.print(":");
+    Serial.print(config->poolPort);
+
+    Serial.print(" | Wallet=");
+    printMaskedWallet(config->wallet);
+
+    Serial.print(" | Config=");
+    Serial.print(nvs_config_is_valid() ? "OK" : "MISSING_WALLET");
+
+    Serial.print(" | Stratum=");
+    Serial.print(stratum_is_connected() ? "CONNECTED" : "DISCONNECTED");
+    if (stratum_is_connected()) {
+        Serial.print(" current=");
+        Serial.print(currentPool && currentPool[0] ? currentPool : "(unknown)");
+        if (stratum_is_backup()) {
+            Serial.print(" backup");
+        }
+    }
+    Serial.println();
+#endif
 }
 
 /**
@@ -549,6 +664,9 @@ void setupTasks() {
                 MINER_1_CORE
             );
 
+            #if defined(S3_CORE1_ONLY)
+            Serial.println("[INIT] Core0 miner disabled for S3 SHA benchmark");
+            #else
             // Miner on Core 0 (lower priority, yields to WiFi/Stratum/Display)
             xTaskCreatePinnedToCore(
                 miner_task_core0,
@@ -559,6 +677,7 @@ void setupTasks() {
                 &miner0Task,
                 MINER_0_CORE
             );
+            #endif
 
             Serial.println("[INIT] All tasks created (dual-core mining)");
         #else
@@ -594,3 +713,5 @@ void printBanner() {
 }
 
 // Mining functions are implemented in mining/miner.cpp
+
+#endif // BOOT_TEST_MINIMAL

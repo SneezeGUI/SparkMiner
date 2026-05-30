@@ -47,7 +47,20 @@ void miner_sha256_midstate(sha256_hash_t *ctx, block_header_t *hb);
  * @param hb Block header with current nonce
  * @return true if hash passes 16-bit check (potential share), false otherwise
  */
-bool miner_sha256_header(sha256_hash_t *midpoint, sha256_hash_t *ctx, block_header_t *hb);
+bool IRAM_ATTR miner_sha256_header(sha256_hash_t *midpoint, sha256_hash_t *ctx, block_header_t *hb);
+
+/**
+ * Core0 hot path: complete double SHA-256 from a cached midstate and cached
+ * big-endian tail words. Avoids touching the 80-byte header for every nonce.
+ */
+bool IRAM_ATTR miner_sha256_header_nonce(
+    sha256_hash_t *midpoint,
+    sha256_hash_t *ctx,
+    uint32_t tail0_be,
+    uint32_t tail1_be,
+    uint32_t tail2_be,
+    uint32_t nonce
+);
 
 #ifdef __cplusplus
 }

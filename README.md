@@ -40,7 +40,6 @@ The easiest way to install and manage SparkMiner on CYD boards (1-USB or 2-USB v
 - No need to re-flash via USB for updates
 - Config persists on SD card
 
-
 ### Option 2: Direct USB Flashing
 
 1. Download the latest `*_factory.bin` firmware from [Releases](https://github.com/SneezeGUI/SparkMiner/releases)
@@ -50,7 +49,6 @@ The easiest way to install and manage SparkMiner on CYD boards (1-USB or 2-USB v
    ```
 3. Power on the board - it will create a WiFi access point
 4. Connect to `SparkMiner-XXXX` WiFi and configure via the web portal
-
 
 ### Option 3: Build from Source
 
@@ -65,24 +63,14 @@ python -m venv .venv
 # source .venv/bin/activate  # Linux/Mac
 pip install platformio
 
-
 # Use the interactive devtool (recommended)
 devtool.bat          # Windows - interactive menu
 python devtool.py    # Cross-platform
-
-# Or configure a device via WiFi AP (no SD card needed):
-python scripts/config_miner.py --host 192.168.4.1 --ssid "YourWiFi" --wifi-password "YourPass" --wallet "bc1q..." [other options]
-
-See the "Command-Line Configuration Tool" section below for details.
 
 # Or build a specific board directly
 python devtool.py build -b cyd-2usb
 python devtool.py flash -b cyd-2usb
 python devtool.py monitor
-
-# Wemos Lolin32 + OLED
-python devtool.py build -b wemos-lolin32-oled
-python devtool.py flash -b wemos-lolin32-oled
 
 # All-in-one: build, flash, and monitor
 python devtool.py all -b cyd-2usb
@@ -148,8 +136,7 @@ Find your board below and download the matching firmware from [Releases](https:/
 | Your Board | Firmware File | Notes |
 |------------|---------------|-------|
 | **ESP32 DevKit** | `esp32-headless_firmware.bin` | Any generic ESP32, GPIO LED status |
-| **ESP32-WROOM-32** | `esp32-headless_firmware.bin` | Headless — GPIO LED on pin 2 |
-| **Wemos Lolin32 + OLED** | `wemos-lolin32-oled_firmware.bin` | 128x64 SSD1306 I2C (SDA=5, SCL=4, RST=16, addr=0x3C) |
+| **ESP32-WROOM-32** | `esp32-headless_firmware.bin` | GPIO LED on pin 2 |
 | **NodeMCU ESP32** | `esp32-headless_firmware.bin` | Use headless firmware |
 
 ### File Types
@@ -176,7 +163,6 @@ Find your board below and download the matching firmware from [Releases](https:/
 | CYD (ESP32-2432S028) | ✅ Full | Primary target, 3 variants |
 | Freenove ESP32-S3 | ✅ Full | 2.8" IPS with SD_MMC |
 | ESP32-S3/C3 + OLED | ✅ Full | 128x64 SSD1306 I2C |
-| Wemos Lolin32 + OLED | ✅ Full | 128x64 SSD1306 I2C (SDA=GPIO5, SCL=GPIO4, RST=GPIO16, addr=0x3C) |
 | ESP32-S3/C3 Mini | ✅ Full | RGB LED status |
 | ESP32 Headless | ✅ Full | GPIO LED status indicator |
 | LILYGO T-Display S3 | ❌ None | Not yet supported |
@@ -205,7 +191,6 @@ Find your board below and download the matching firmware from [Releases](https:/
 ---
 
 ## Configuration
-
 
 SparkMiner can be configured in three ways (in order of priority):
 
@@ -249,15 +234,7 @@ Create a `config.json` file on a FAT32-formatted microSD card:
 | `stats_proxy_url` | No | - | HTTP proxy for HTTPS APIs |
 | `enable_https_stats` | No | `false` | Direct HTTPS (unstable) |
 
-
 ### 2. WiFi Access Point Portal
-
-You can also automate configuration via the included Python tool:
-
-```bash
-python scripts/config_miner.py --host 192.168.4.1 --ssid "YourWiFi" --wifi-password "YourPass" --wallet "bc1q..."
-```
-This tool submits configuration directly to the device's AP portal. Run with `--help` for all options.
 
 If no SD card config is found, SparkMiner creates a WiFi access point:
 
@@ -659,8 +636,6 @@ SparkMiner/
 ├── include/
 │   └── board_config.h        # Hardware definitions
 ├── devtool.py                # Unified build/flash/monitor tool
-├── scripts/
-│   └── config_miner.py       # Command-line WiFi config tool
 ├── devtool.bat               # Windows launcher
 ├── devtool.toml              # Board & project configuration
 ├── platformio.ini            # PlatformIO build settings
@@ -670,41 +645,6 @@ SparkMiner/
 ---
 
 ## FAQ
----
-
-## Command-Line Configuration Tool
-
-The script [`scripts/config_miner.py`](scripts/config_miner.py) lets you configure a SparkMiner device over WiFi from your computer, automating the AP portal process.
-
-### Usage
-
-```bash
-python scripts/config_miner.py --host 192.168.4.1 --ssid "YourWiFi" --wifi-password "YourPass" --wallet "bc1q..." [other options]
-```
-
-**Common options:**
-
-- `--host` (default: 192.168.4.1) — IP or hostname of the SparkMiner AP
-- `--ssid` — WiFi SSID to connect to
-- `--wifi-password` — WiFi password
-- `--wallet` — Bitcoin wallet address
-- `--worker` — Worker name (default: SparkMiner)
-- `--pool-url` — Pool host (default: public-pool.io)
-- `--pool-port` — Pool port (default: 21496)
-- `--brightness` — Display brightness (0-100)
-- `--screen-timeout` — Screen timeout in seconds
-- `--rotation` — Screen rotation (0-3)
-- `--invert` — Invert display colors (1/0)
-- `--stats-en` — Enable live stats (1/0)
-- `--stats-api` — Custom stats API URL
-- `--stats-proxy` — Stats HTTP proxy URL
-- `--https-stats` — Enable HTTPS stats (1/0)
-- `--timeout` — HTTP timeout (seconds)
-- `--insecure` — Skip TLS verification
-
-Run `python scripts/config_miner.py --help` for the full list and details.
-
-This is useful for scripting, automation, or headless device setup without using the web UI.
 
 **Q: Will I actually mine a Bitcoin block?**
 
@@ -756,7 +696,7 @@ Contributions are welcome! Please:
 
 ## License
 
-GPL v3 License - see [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 

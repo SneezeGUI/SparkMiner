@@ -13,7 +13,9 @@
 #include <board_config.h>
 
 // Stratum protocol constants
+#ifndef DESIRED_DIFFICULTY
 #define DESIRED_DIFFICULTY      0.0014
+#endif
 #define STRATUM_MSG_SIZE        512
 #define MAX_PENDING_SUBMISSIONS 30
 
@@ -28,7 +30,7 @@ typedef void (*SubmitCallback)(uint32_t sessionId, uint32_t msgId, bool accepted
 #define STRATUM_JOB_ID_LEN      32      // Job ID (pools may send 16+ chars)
 #define STRATUM_PREVHASH_LEN    68      // Previous block hash (64 hex + null)
 #define STRATUM_COINBASE1_LEN   512     // Coinbase part 1 (variable, can be large)
-#define STRATUM_COINBASE2_LEN   1024    // Coinbase part 2 (pools may send large coinbase2 with OP_RETURN outputs)
+#define STRATUM_COINBASE2_LEN   256     // Coinbase part 2
 #define STRATUM_EXTRANONCE_LEN  32      // Extra nonce (usually 8-16 hex)
 #define STRATUM_FIELD_LEN       12      // Version/nbits/ntime (8 hex + null)
 #define STRATUM_MAX_MERKLE      16      // Max merkle branches (usually < 10)

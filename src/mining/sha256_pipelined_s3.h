@@ -99,6 +99,34 @@ bool sha256_pipelined_mine_s3_v3(
     volatile bool *mining_flag
 );
 
+/**
+ * External Xtensa assembly S3 mining loop.
+ * Keeps tail words and constants in registers and returns false only when
+ * mining_flag is cleared.
+ *
+ * IMPORTANT: Call sha256_s3_init_zeros() once per job before using this.
+ */
+bool sha256_pipelined_mine_s3_v4(
+    const uint32_t *midstate,
+    const uint32_t *block2_words,
+    uint32_t *nonce_ptr,
+    volatile uint64_t *hash_count_ptr,
+    volatile bool *mining_flag,
+    uint32_t early_h7_limit
+);
+
+/**
+ * Profile the ESP32-S3 SHA v3 flow for a short nonce window.
+ * Diagnostic only: measures register/setup/wait/copy phases and prints
+ * average CPU cycles per hash.
+ */
+void sha256_pipelined_s3_profile_v3(
+    const uint32_t *midstate,
+    const uint32_t *block2_words,
+    uint32_t nonce,
+    uint32_t samples
+);
+
 #endif // CONFIG_IDF_TARGET_ESP32S3
 
 #ifdef __cplusplus

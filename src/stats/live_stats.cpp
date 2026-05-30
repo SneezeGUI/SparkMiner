@@ -893,6 +893,12 @@ static void updateNetworkDifficulty() {
 void live_stats_init() {
     s_statsMutex = xSemaphoreCreateMutex();
 
+    #if defined(DISABLE_LIVE_STATS)
+    s_statsEnabled = false;
+    Serial.println("[STATS] Live stats DISABLED for mining stability");
+    return;
+    #endif
+
     // Load stats config
     miner_config_t *config = nvs_config_get();
 

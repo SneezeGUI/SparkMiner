@@ -86,10 +86,28 @@ needs_boot_mode = false
 group = "Headless (No Display)"
 
 [boards.esp32-s3-devkit]
-name = "ESP32-S3 DevKit"
+name = "ESP32-S3 DevKit N16R8 (16MB)"
 env = "esp32-s3-devkit"
 chip = "esp32s3"
-description = "ESP32-S3 DevKitC-1 headless with PSRAM"
+description = "ESP32-S3 DevKitC-1 N16R8 headless, 16MB flash, 8MB PSRAM"
+needs_boot_mode = true
+port_changes_on_reset = true
+group = "Headless (No Display)"
+
+[boards.esp32-s3-devkit-n8]
+name = "ESP32-S3 DevKit N8R8 (8MB)"
+env = "esp32-s3-devkit-n8"
+chip = "esp32s3"
+description = "ESP32-S3 DevKitC-1 N8R8 headless, 8MB flash, 8MB PSRAM"
+needs_boot_mode = true
+port_changes_on_reset = true
+group = "Headless (No Display)"
+
+[boards.esp32-s3-devkit-n8-nopsram]
+name = "ESP32-S3 DevKit N8 (8MB, no PSRAM)"
+env = "esp32-s3-devkit-n8-nopsram"
+chip = "esp32s3"
+description = "ESP32-S3 DevKitC-1 N8 headless, 8MB flash, no PSRAM"
 needs_boot_mode = true
 port_changes_on_reset = true
 group = "Headless (No Display)"
@@ -147,14 +165,6 @@ description = "ESP32-S3 headless variant for Wireless Paper board"
 needs_boot_mode = true
 port_changes_on_reset = true
 group = "Headless (No Display)"
-
-[boards.wemos-lolin32-oled]
-name = "Wemos Lolin32 + OLED"
-env = "wemos-lolin32-oled"
-chip = "esp32"
-description = "Wemos Lolin32 with SSD1306 OLED (SDA=GPIO5, SCL=GPIO4, RST=GPIO16, addr=0x3C)"
-needs_boot_mode = false
-group = "OLED Display"
 
 # ============================================================
 # Release Settings

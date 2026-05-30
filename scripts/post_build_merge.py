@@ -22,13 +22,13 @@ def detect_esp32_type(bootloader_path):
         chip_id = bootloader_data[12]
         size = len(bootloader_data)
 
-        if chip_id == 0x09 and size >= 15000:
+        if chip_id == 0x09:
             return 'ESP32-S3'
-        elif chip_id == 0x05 and size >= 13000 and size < 14000:
+        elif chip_id == 0x05:
             return 'ESP32-C3'
-        elif chip_id == 0x02 and size >= 13000 and size < 15000:
+        elif chip_id == 0x02:
             return 'ESP32-S2'
-        elif chip_id == 0x00 and size >= 17000:
+        elif chip_id == 0x00:
             return 'ESP32'
         else:
             if size >= 17000:
@@ -74,7 +74,7 @@ def get_friendly_name(env_name):
 
     Names match devtool.toml board keys:
     - CYD boards: cyd-1usb, cyd-2usb (easy to distinguish USB variants)
-    - S3 boards: freenove-s3, esp32-s3-devkit, esp32-s3-mini
+    - S3 boards: freenove-s3, esp32-s3-devkit-n16, esp32-s3-mini
     - Headless: esp32-headless
     """
     friendly_names = {
@@ -82,7 +82,7 @@ def get_friendly_name(env_name):
         'esp32-2432s028-st7789': 'cyd-1usb-st7789',
         'esp32-2432s028-2usb': 'cyd-2usb',
         'esp32-s3-2432s028': 'freenove-s3',
-        'esp32-s3-devkit': 'esp32-s3-devkit',
+        'esp32-s3-devkit': 'esp32-s3-devkit-n16',
         'esp32-headless': 'esp32-headless',
         'esp32-s3-mini': 'esp32-s3-mini',
         'lilygo-t-display-s3': 'lilygo-t-display-s3',

@@ -21,6 +21,12 @@ if exist ".venv\Scripts\python.exe" (
     goto :check_error
 )
 
+REM Use the current user's PlatformIO Python environment if available
+if exist "%USERPROFILE%\.platformio\penv\Scripts\python.exe" (
+    "%USERPROFILE%\.platformio\penv\Scripts\python.exe" devtool.py %*
+    goto :check_error
+)
+
 REM Try system Python
 where python >nul 2>nul
 if %ERRORLEVEL% equ 0 (

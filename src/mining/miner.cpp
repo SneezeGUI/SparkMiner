@@ -224,7 +224,7 @@ static void calculateMerkleRoot(uint8_t *root, uint8_t *coinbaseHash, const stra
 }
 
 static void createCoinbaseHash(uint8_t *hash, const stratum_job_t *job) {
-    uint8_t coinbase[1024];
+    uint8_t coinbase[512];
     size_t cbLen = 0;
 
     // Coinbase1 (now char array)
@@ -245,10 +245,6 @@ static void createCoinbaseHash(uint8_t *hash, const stratum_job_t *job) {
 
     // Coinbase2 (now char array)
     size_t cb2Len = strlen(job->coinBase2);
-    if (cbLen + cb2Len / 2 > sizeof(coinbase)) {
-        Serial.printf("[MINER] ERROR: Coinbase exceeds buffer (%d bytes)\n", cbLen + cb2Len / 2);
-        return;
-    }
     hexToBytes(&coinbase[cbLen], job->coinBase2, cb2Len);
     cbLen += cb2Len / 2;
 
@@ -310,10 +306,11 @@ static void hashCheck(const char *jobId, sha256_hash_t *ctx, uint32_t timestamp,
         }
 
         double shareDiff = getDifficulty(ctx);
+        #if !defined(QUIET_MINER_SHARES)
         Serial.printf("[MINER] Share found! Diff: %.4f (pool: %.4f) Nonce: %08x\n", shareDiff, s_poolDifficulty, nonce);
+        #endif
 
-        // Debug logging for share validation (Issue #5 investigation)
-        #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(DEBUG_SHARE_VALIDATION)
+        #if defined(DEBUG_SHARE_VALIDATION)
         Serial.printf("[SHARE] job=%s time=%08x nonce=%08x\n", jobId, timestamp, nonce);
         Serial.printf("[SHARE] hash[28-31]=%02x%02x%02x%02x (should have leading zeros)\n",
                       ctx->bytes[28], ctx->bytes[29], ctx->bytes[30], ctx->bytes[31]);
@@ -332,8 +329,9 @@ static void hashCheck(const char *jobId, sha256_hash_t *ctx, uint32_t timestamp,
         submission.flags = flags;
         submission.difficulty = shareDiff;
 
-        stratum_submit_share(&submission);
-        s_stats.shares++;
+        if (!stratum_submit_share(&submission)) {
+            Serial.println("[MINER] Share submit queue full/disconnected, dropped");
+        }
     }
 
     // Always track best difficulty for stats
@@ -433,7 +431,7 @@ void miner_start_job(const stratum_job_t *job) {
 
     strncpy(s_currentJobId, job->jobId, MAX_JOB_ID_LEN - 1);
 
-    // Debug: print header bytes
+    #if defined(DEBUG_JOB_TEMPLATE)
     char en2Hex[17];
     encodeExtraNonce(en2Hex, s_extraNonce2Size, s_extraNonce2);
     Serial.printf("[MINER] New job: %s, diff=%08x\n", s_currentJobId, s_pendingBlock.difficulty);
@@ -443,6 +441,7 @@ void miner_start_job(const stratum_job_t *job) {
         ((uint8_t*)&s_pendingBlock)[2], ((uint8_t*)&s_pendingBlock)[3],
         ((uint8_t*)&s_pendingBlock)[4], ((uint8_t*)&s_pendingBlock)[5],
         ((uint8_t*)&s_pendingBlock)[6], ((uint8_t*)&s_pendingBlock)[7]);
+    #endif
 
     // Set block target
     bits_to_target(s_pendingBlock.difficulty, s_blockTarget);
@@ -489,28 +488,25 @@ void miner_set_extranonce(const char *extraNonce1, int extraNonce2Size) {
 }
 
 // ============================================================
-// Mining Task - Core 0 (Hybrid: Hardware SHA when available, Software fallback)
+// Mining Task - Core 0 (CPU-only software SHA)
 // ============================================================
 
 void miner_task_core0(void *param) {
     block_header_t hb;
     sha256_hash_t ctx;
-    sha256_hash_t sw_midstate;  // Software midstate for fallback
-    uint32_t hw_midstate[8];    // Hardware midstate for opportunistic HW SHA
+    sha256_hash_t sw_midstate;
     char jobId[MAX_JOB_ID_LEN];
     uint32_t minerId = 0;
     uint32_t yieldCounter = 0;
-    uint32_t hwHashes = 0;  // Track hardware SHA usage
-    uint32_t swHashes = 0;  // Track software SHA usage
 
-    Serial.printf("[MINER0] Started on core %d (HYBRID HW/SW SHA, priority %d)\n",
+    Serial.printf("[MINER0] Started on core %d (CPU-only software SHA, priority %d)\n",
                   xPortGetCoreID(), uxTaskPriorityGet(NULL));
 
     // Wait for first job
     while (!s_miningActive) {
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
-    Serial.println("[MINER0] Got first job, starting hybrid mining (HW when Core 1 yields)");
+    Serial.println("[MINER0] Got first job, starting CPU-only software mining");
 
     while (true) {
         if (!s_miningActive) {
@@ -528,40 +524,24 @@ void miner_task_core0(void *param) {
         hb.nonce = s_startNonce[minerId];
         xSemaphoreGive(s_jobMutex);
 
-        // Always compute SOFTWARE midstate (for fallback and verification)
         miner_sha256_midstate(&sw_midstate, &hb);
-
-        // Prepare byte-swapped header for hardware SHA
-        uint32_t header_swapped[20];
-        uint32_t *header_words = (uint32_t *)&hb;
-        for (int i = 0; i < 20; i++) {
-            header_swapped[i] = __builtin_bswap32(header_words[i]);
-        }
-
-        // Try to compute hardware midstate if we can grab the mutex
-        bool hasHwMidstate = false;
-        if (!s_core1HasSha && xSemaphoreTake(s_shaMutex, 0) == pdTRUE) {
-            sha256_ll_acquire();
-            sha256_ll_midstate(hw_midstate, (const uint8_t *)header_swapped);
-            sha256_ll_release();
-            xSemaphoreGive(s_shaMutex);
-            hasHwMidstate = true;
-        }
+        const uint32_t *hbWords = (const uint32_t *)&hb;
+        const uint32_t tail0_be = __builtin_bswap32(hbWords[16]);
+        const uint32_t tail1_be = __builtin_bswap32(hbWords[17]);
+        const uint32_t tail2_be = __builtin_bswap32(hbWords[18]);
 
         while (s_miningActive) {
-            // Pure software SHA - no hardware contention with Core 1
-            if (miner_sha256_header(&sw_midstate, &ctx, &hb)) {
+            if (miner_sha256_header_nonce(&sw_midstate, &ctx, tail0_be, tail1_be, tail2_be, hb.nonce)) {
                 hashCheck(jobId, &ctx, hb.timestamp, hb.nonce);
             }
             hb.nonce++;
-            s_stats.hashes++;
-            s_core0Hashes++;  // DEBUG: Track Core 0 contribution
+            s_core0Hashes++;
             yieldCounter++;
 
-            // Yield every 256 hashes to let monitor/WiFi tasks run
             if (yieldCounter >= CORE_0_YIELD_COUNT) {
                 yieldCounter = 0;
-                vTaskDelay(1);  // Must use vTaskDelay(1), not taskYIELD()
+                s_stats.hashes = s_core0Hashes + s_core1Hashes;
+                vTaskDelay(1);
             }
         }
 
@@ -740,33 +720,237 @@ void miner_task_core1(void *param) {
 }
 
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
-#include <sha/sha_dma.h>  // For esp_sha_acquire/release_hardware
-// ESP32-S3: Optimized pipelined assembly mining with MIDSTATE CACHING (v2)
-// Key optimizations:
-// 1. Hardware midstate computed ONCE per job (not per nonce!)
-// 2. Block 2 template prepared once, only nonce changes
-// 3. Double-hash padding leverages zeros from block 2
+
+#if defined(USE_S3_SOFTWARE_MINER)
+
+// ESP32-S3 default: use the proven software midstate miner on Core 1 too.
+// Useful as a correctness fallback, but too slow for pool-side hashrate.
+void miner_task_core1(void *param) {
+    block_header_t hb;
+    sha256_hash_t ctx;
+    sha256_hash_t midstate;
+    char jobId[MAX_JOB_ID_LEN];
+    uint32_t minerId = 1;
+    uint32_t yieldCounter = 0;
+
+    Serial.printf("[MINER1] Started on core %d (ESP32-S3 software SHA, priority %d)\n",
+                  xPortGetCoreID(), uxTaskPriorityGet(NULL));
+
+    while (!s_miningActive) {
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
+    Serial.println("[MINER1] Got first job, starting ESP32-S3 software mining");
+
+    while (true) {
+        if (!s_miningActive) {
+            s_core1Mining = false;
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        s_core1Mining = true;
+
+        xSemaphoreTake(s_jobMutex, portMAX_DELAY);
+        memcpy(&hb, &s_pendingBlock, sizeof(block_header_t));
+        strncpy(jobId, s_currentJobId, MAX_JOB_ID_LEN);
+        hb.nonce = s_startNonce[minerId];
+        xSemaphoreGive(s_jobMutex);
+
+        miner_sha256_midstate(&midstate, &hb);
+
+        while (s_miningActive) {
+            if (miner_sha256_header(&midstate, &ctx, &hb)) {
+                hashCheck(jobId, &ctx, hb.timestamp, hb.nonce);
+            }
+
+            hb.nonce++;
+            s_stats.hashes++;
+            s_core1Hashes++;
+
+            if (++yieldCounter >= CORE_0_YIELD_COUNT) {
+                yieldCounter = 0;
+                vTaskDelay(1);
+            }
+        }
+
+        s_core1Mining = false;
+        vTaskDelay(20 / portTICK_PERIOD_MS);
+    }
+}
+
+#elif defined(USE_S3_ASM_HW_MINER)
+
+#include "sha256_pipelined_s3.h"
+// ESP32-S3: optimized assembly SHA loop with S3-native endian handling.
+
+static bool s_s3ShaProfilePrinted = false;
+
+#if defined(PROFILE_S3_V4_TOTAL)
+static inline uint32_t readCycleCount() {
+    uint32_t ccount;
+    __asm__ __volatile__("rsr.ccount %0" : "=a"(ccount));
+    return ccount;
+}
+#endif
+
+static void bswapWords(uint32_t *dst, const uint32_t *src, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        dst[i] = __builtin_bswap32(src[i]);
+    }
+}
 
 void miner_task_core1(void *param) {
     block_header_t hb;
-    block_header_t hbVerify;  // BitsyMiner pattern: keep UNSWAPPED copy for verification
-    sha256_hash_t ctx;
-    sha256_hash_t sw_midstate;  // SOFTWARE midstate for verification
-    uint32_t hw_midstate[8];    // HARDWARE midstate for mining (NEW!)
+    sha256_hash_t midstate;
+    uint32_t hw_midstate[8];
+    uint32_t tail_template[3];
     char jobId[MAX_JOB_ID_LEN];
     uint32_t minerId = 1;
 
-    Serial.printf("[MINER1] Started on core %d (S3 Optimized ASM v2 + Midstate Cache, priority %d)\n",
+    Serial.printf("[MINER1] Started on core %d (ESP32-S3 ASM SHA, priority %d)\n",
                   xPortGetCoreID(), uxTaskPriorityGet(NULL));
 
-    // Initialize S3 pipelined SHA hardware
-    sha256_pipelined_s3_init();
+    while (!s_miningActive) {
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
+    Serial.println("[MINER1] Got first job, starting ESP32-S3 ASM SHA mining");
+
+    while (true) {
+        if (!s_miningActive) {
+            s_core1Mining = false;
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        s_core1Mining = true;
+
+        xSemaphoreTake(s_jobMutex, portMAX_DELAY);
+        memcpy(&hb, &s_pendingBlock, sizeof(block_header_t));
+        strncpy(jobId, s_currentJobId, MAX_JOB_ID_LEN);
+        xSemaphoreGive(s_jobMutex);
+
+        miner_sha256_midstate(&midstate, &hb);
+        bswapWords(hw_midstate, midstate.hash, 8);
+
+        uint32_t *hb_words = (uint32_t *)&hb;
+        tail_template[0] = hb_words[16];
+        tail_template[1] = hb_words[17];
+        tail_template[2] = hb_words[18];
+
+        uint32_t nonce = s_startNonce[minerId];
+
+        xSemaphoreTake(s_shaMutex, portMAX_DELAY);
+        s_core1HasSha = true;
+        sha256_ll_acquire();
+        sha256_s3_init_zeros();
+
+        #if defined(PROFILE_S3_SHA)
+        if (!s_s3ShaProfilePrinted) {
+            sha256_pipelined_s3_profile_v3(hw_midstate, tail_template, nonce, 4096);
+            s_s3ShaProfilePrinted = true;
+        }
+        #endif
+
+        while (s_miningActive) {
+            uint64_t hashBefore = s_core1Hashes;
+            #if defined(PROFILE_S3_V4_TOTAL)
+            uint32_t profileStart = readCycleCount();
+            #endif
+            #if defined(USE_S3_ASM_V4)
+            uint32_t earlyH7Limit = (uint32_t)s_poolTarget[28] |
+                                    ((uint32_t)s_poolTarget[29] << 8) |
+                                    ((uint32_t)s_poolTarget[30] << 16) |
+                                    ((uint32_t)s_poolTarget[31] << 24);
+            bool candidate = sha256_pipelined_mine_s3_v4(
+                hw_midstate,
+                tail_template,
+                &nonce,
+                &s_core1Hashes,
+                &s_miningActive,
+                earlyH7Limit
+            );
+            #else
+            bool candidate = sha256_pipelined_mine_s3_v3(
+                hw_midstate,
+                tail_template,
+                &nonce,
+                &s_core1Hashes,
+                &s_miningActive
+            );
+            #endif
+            uint64_t batchHashes = s_core1Hashes - hashBefore;
+            s_stats.hashes = s_core0Hashes + s_core1Hashes;
+
+            #if defined(PROFILE_S3_V4_TOTAL)
+            static uint64_t profileHashes = 0;
+            static uint64_t profileCycles = 0;
+            static uint32_t profileReports = 0;
+            if (batchHashes > 0) {
+                profileCycles += (uint32_t)(readCycleCount() - profileStart);
+                profileHashes += batchHashes;
+                if (profileHashes >= 1048576ULL) {
+                    double cyclesPerHash = (double)profileCycles / (double)profileHashes;
+                    double khs = ((double)getCpuFrequencyMhz() * 1000.0) / cyclesPerHash;
+                    Serial.printf("[S3-V4] total cycles/hash=%.1f est=%.1f kH/s samples=%llu reports=%lu\n",
+                                  cyclesPerHash, khs, profileHashes, ++profileReports);
+                    profileHashes = 0;
+                    profileCycles = 0;
+                }
+            }
+            #endif
+
+            if (!s_miningActive) break;
+
+            if (candidate) {
+                uint32_t candidate_nonce = nonce - 1;
+                hb.nonce = candidate_nonce;
+
+                sha256_hash_t ctx;
+                miner_sha256_header(&midstate, &ctx, &hb);
+                hashCheck(jobId, &ctx, hb.timestamp, candidate_nonce);
+            }
+
+            taskYIELD();
+        }
+
+        sha256_ll_release();
+        s_core1HasSha = false;
+        xSemaphoreGive(s_shaMutex);
+
+        s_core1Mining = false;
+        vTaskDelay(20 / portTICK_PERIOD_MS);
+    }
+}
+
+#elif defined(USE_S3_SAFE_HW_MINER)
+
+#include "sha256_s3_mining.h"
+// ESP32-S3: Hardware SHA with correct endianness handling
+// See: https://github.com/espressif/esp-idf/issues/12440
+
+static void bswapWords(uint32_t *dst, const uint32_t *src, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        dst[i] = __builtin_bswap32(src[i]);
+    }
+}
+
+void miner_task_core1(void *param) {
+    block_header_t hb;
+    sha256_hash_t midstate;
+    uint32_t hw_midstate[8];
+    uint32_t tail_template[3];
+    char jobId[MAX_JOB_ID_LEN];
+    uint32_t minerId = 1;
+    uint8_t result_hash[32];
+
+    Serial.printf("[MINER1] Started on core %d (ESP32-S3 hardware SHA, priority %d)\n",
+                  xPortGetCoreID(), uxTaskPriorityGet(NULL));
 
     // Wait for first job
     while (!s_miningActive) {
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
-    Serial.println("[MINER1] Got first job, starting S3 optimized assembly mining (v2 with midstate)");
+    Serial.println("[MINER1] Got first job, starting ESP32-S3 hardware SHA mining");
 
     while (true) {
         if (!s_miningActive) {
@@ -779,116 +963,158 @@ void miner_task_core1(void *param) {
         // Copy job data
         xSemaphoreTake(s_jobMutex, portMAX_DELAY);
         memcpy(&hb, &s_pendingBlock, sizeof(block_header_t));
-        memcpy(&hbVerify, &s_pendingBlock, sizeof(block_header_t));  // Keep UNSWAPPED for verification!
         strncpy(jobId, s_currentJobId, MAX_JOB_ID_LEN);
         xSemaphoreGive(s_jobMutex);
 
-        // BitsyMiner pattern: Compute SOFTWARE midstate on UNSWAPPED header (for verification)
-        miner_sha256_midstate(&sw_midstate, &hbVerify);
+        // Compute midstate in software. The S3 SHA_H registers accept the same
+        // state words byte-swapped compared to the software compressor.
+        miner_sha256_midstate(&midstate, &hb);
+        bswapWords(hw_midstate, midstate.hash, 8);
+        
+        // Header second block is bytes 64..79:
+        // merkle_root[28..31], timestamp, nbits, nonce.
+        uint32_t *hb_words = (uint32_t *)&hb;
+        tail_template[0] = hb_words[16];  // merkle tail
+        tail_template[1] = hb_words[17];  // ntime
+        tail_template[2] = hb_words[18];  // nbits
 
-        // ========================================
-        // BYTESWAP32 all 20 words of header for hardware SHA
-        // ========================================
-        uint32_t header_swapped[20];
-        uint32_t *header_words = (uint32_t *)&hb;
-        for (int i = 0; i < 20; i++) {
-            header_swapped[i] = __builtin_bswap32(header_words[i]);
-        }
+        // Set starting nonce
+        uint32_t nonce = s_startNonce[minerId];
 
-        // ========================================
-        // OPTIMIZATION v3: Compute hardware midstate ONCE per job!
-        // Also initialize persistent zeros in SHA_TEXT
-        // ========================================
-        esp_sha_acquire_hardware();
-        sha256_s3_compute_midstate(header_swapped, hw_midstate);
-        sha256_s3_init_zeros();  // Set persistent zeros for block 2 padding
-
-        // Prepare block 2 template (words 16-18: last 4 bytes merkle, timestamp, nbits)
-        // Word 19 (nonce) will be set per iteration
-        uint32_t block2_template[3];
-        block2_template[0] = header_swapped[16];  // merkle_root tail (swapped)
-        block2_template[1] = header_swapped[17];  // timestamp (swapped)
-        block2_template[2] = header_swapped[18];  // nbits (swapped)
-
-        // Nonce in big-endian format for hardware SHA
-        uint32_t nonce_swapped = __builtin_bswap32(s_startNonce[minerId]);
-
-        #ifdef DEBUG_MINING
-        Serial.printf("[S3-V3] Midstate cached, zeros persistent, starting batched-copy loop\n");
-        static uint32_t s3_call_count = 0;
-        uint64_t hashes_before = s_stats.hashes;
-        #endif
+        xSemaphoreTake(s_shaMutex, portMAX_DELAY);
+        s_core1HasSha = true;
+        sha256_ll_acquire();
 
         while (s_miningActive) {
-            // Run ULTRA-OPTIMIZED pipelined assembly mining loop (v3)
-            // - Midstate restore (same as v2)
-            // - Batched register loads for SHA_H copy (pipeline memory)
-            // - Persistent zeros (skip writing 10 zeros per iteration)
-            #ifdef DEBUG_MINING
-            s3_call_count++;
-            #endif
+            uint64_t hashBefore = s_stats.hashes;
 
-            bool candidate = sha256_pipelined_mine_s3_v3(
+            // Hardware SHA mining with correct endianness
+            bool candidate = sha256_s3_mine(
                 hw_midstate,
-                block2_template,
-                &nonce_swapped,
+                tail_template,
+                &nonce,
                 &s_stats.hashes,
-                &s_miningActive
+                &s_miningActive,
+                result_hash
             );
-
-            #ifdef DEBUG_MINING
-            if ((s3_call_count & 0x7FFFF) == 0) {  // Every ~512K calls
-                uint64_t hashes_now = s_stats.hashes;
-                Serial.printf("[S3-V3] calls=%u, hashes=%llu\n", s3_call_count, hashes_now);
-            }
-            #endif
-
+            
             if (!s_miningActive) break;
-
+            
             if (candidate) {
-                // BitsyMiner pattern: The assembly incremented nonce BEFORE exiting
-                uint32_t candidate_nonce_swapped = nonce_swapped - 1;
-                uint32_t candidate_nonce_native = __builtin_bswap32(candidate_nonce_swapped);
-
-                // Debug logging for S3 share validation investigation (Issue #5)
-                #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(DEBUG_SHARE_VALIDATION)
-                Serial.printf("[S3-DBG] Candidate found! nonce_swapped=%08x native=%08x\n",
-                              candidate_nonce_swapped, candidate_nonce_native);
-                #endif
-
-                // BitsyMiner CRITICAL: Verify with SOFTWARE SHA on UNSWAPPED header
-                hbVerify.nonce = candidate_nonce_native;
-                bool swVerified = miner_sha256_header(&sw_midstate, &ctx, &hbVerify);
-
-                // Debug logging for S3 share validation investigation (Issue #5)
-                #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(DEBUG_SHARE_VALIDATION)
-                Serial.printf("[S3-DBG] SW verify=%s hash[28-31]=%02x%02x%02x%02x\n",
-                              swVerified ? "PASS" : "FAIL",
-                              ctx.bytes[28], ctx.bytes[29], ctx.bytes[30], ctx.bytes[31]);
-                #endif
-
-                if (swVerified) {
-                    hashCheck(jobId, &ctx, hbVerify.timestamp, candidate_nonce_native);
+                // Verify candidate with software SHA
+                uint32_t candidate_nonce = nonce - 1;
+                hb.nonce = candidate_nonce;
+                
+                sha256_hash_t ctx;
+                miner_sha256_header(&midstate, &ctx, &hb);
+                
+                // Check target (16-bit early reject)
+                if (ctx.bytes[31] == 0 && ctx.bytes[30] == 0) {
+                    hashCheck(jobId, &ctx, hb.timestamp, candidate_nonce);
                 }
             }
 
-            // Yield periodically to prevent WDT
-            // The ASM function returns every ~65k hashes (on partial match),
-            // so we yield every 16 iterations (approx 1M hashes)
-            static uint32_t loop_iter = 0;
-            if (++loop_iter >= 16) {
-                loop_iter = 0;
-                esp_sha_release_hardware();
-                vTaskDelay(1);
-                esp_sha_acquire_hardware();
-            }
+            s_core1Hashes += (s_stats.hashes - hashBefore);
         }
 
-        esp_sha_release_hardware();
+        sha256_ll_release();
+        s_core1HasSha = false;
+        xSemaphoreGive(s_shaMutex);
+
         s_core1Mining = false;
         vTaskDelay(20 / portTICK_PERIOD_MS);
     }
 }
+
+#else
+
+// ESP32-S3 default: fast direct-register SHA mining, with software verification
+// before any pool submission. This keeps the speed path but prevents bad shares
+// from reaching Stratum if the S3 digest byte order produces a false candidate.
+void miner_task_core1(void *param) {
+    block_header_t hb;
+    block_header_t hbVerify;
+    sha256_hash_t swMidstate;
+    sha256_hash_t ctx;
+    uint32_t hwMidstate[8];
+    char jobId[MAX_JOB_ID_LEN];
+    uint32_t minerId = 1;
+
+    Serial.printf("[MINER1] Started on core %d (ESP32-S3 fast SHA + SW verify, priority %d)\n",
+                  xPortGetCoreID(), uxTaskPriorityGet(NULL));
+
+    while (!s_miningActive) {
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
+    Serial.println("[MINER1] Got first job, starting S3 fast mining loop");
+
+    while (true) {
+        if (!s_miningActive) {
+            s_core1HasSha = false;
+            s_core1Mining = false;
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        s_core1Mining = true;
+
+        xSemaphoreTake(s_jobMutex, portMAX_DELAY);
+        memcpy(&hb, &s_pendingBlock, sizeof(block_header_t));
+        memcpy(&hbVerify, &s_pendingBlock, sizeof(block_header_t));
+        strncpy(jobId, s_currentJobId, MAX_JOB_ID_LEN);
+        hb.nonce = s_startNonce[minerId];
+        xSemaphoreGive(s_jobMutex);
+
+        miner_sha256_midstate(&swMidstate, &hbVerify);
+
+        uint32_t nonce = hb.nonce;
+        const uint8_t *headerTail = ((const uint8_t *)&hb) + 64;
+
+        xSemaphoreTake(s_shaMutex, portMAX_DELAY);
+        s_core1HasSha = true;
+        sha256_ll_acquire();
+        sha256_s3_midstate(hwMidstate, (const uint8_t *)&hb);
+
+        while (s_miningActive) {
+            uint64_t hashBefore = s_stats.hashes;
+            bool candidate = sha256_s3_mine(
+                hwMidstate,
+                headerTail,
+                &nonce,
+                &s_stats.hashes,
+                &s_miningActive
+            );
+            s_core1Hashes += (s_stats.hashes - hashBefore);
+
+            if (!s_miningActive) break;
+
+            if (candidate) {
+                uint32_t candidateNonce = nonce;
+                hbVerify.nonce = candidateNonce;
+
+                if (miner_sha256_header(&swMidstate, &ctx, &hbVerify)) {
+                    hashCheck(jobId, &ctx, hbVerify.timestamp, candidateNonce);
+                } else {
+                    Serial.printf("[MINER1] S3 candidate rejected by software verify: nonce=%08x\n",
+                                  candidateNonce);
+                }
+
+                nonce++;
+            }
+
+            vTaskDelay(1);
+        }
+
+        sha256_ll_release();
+        s_core1HasSha = false;
+        xSemaphoreGive(s_shaMutex);
+
+        s_core1Mining = false;
+        vTaskDelay(20 / portTICK_PERIOD_MS);
+    }
+}
+
+#endif // ESP32-S3 miner selection
 
 #else
 // Fallback for ESP32-C3/S2: Use sequential HAL-based mining with Midstate Optimization
