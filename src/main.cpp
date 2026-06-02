@@ -494,7 +494,7 @@ void setup() {
     Serial.println("=== SparkMiner v" AUTO_VERSION " ===");
     Serial.println("SHA-256 Implementation: "
         #if defined(USE_HARDWARE_SHA)
-            "Hardware (ESP32-S3/C3)"
+            "Hardware/ASM (ESP32-S3)"
         #else
             "Software (Optimized)"
         #endif
