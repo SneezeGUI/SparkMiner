@@ -1,3 +1,5 @@
+Hashrate attuale - 330-350KH/s dopo il fix del 1,4KH/s
+
 ================================================================================
                     SPARKMINER - ESP32-S3 SHA-256 FIX REPORT
                     Bug Fix per Hardware SHA Endianness
