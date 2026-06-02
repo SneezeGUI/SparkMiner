@@ -1,4 +1,4 @@
-# SparkMiner v2.9.5
+# SparkMiner v2.9.6
 
 **High-performance Bitcoin solo miner for ESP32, ESP32-S3 & ESP32-C3**
 
