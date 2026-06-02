@@ -306,11 +306,8 @@ static void parseMiningNotify(const String &line) {
     strncpy(job.extraNonce1, s_extraNonce1, STRATUM_EXTRANONCE_LEN - 1);
     job.extraNonce2Size = s_extraNonce2Size;
 
-    if (job.cleanJobs) {
-        clearQueuedSubmissions();
-    }
-
     s_lastActivity = millis();
+    clearQueuedSubmissions();
     miner_start_job(&job);
 }
 
