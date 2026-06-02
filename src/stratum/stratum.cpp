@@ -20,8 +20,18 @@
 #define RESPONSE_TIMEOUT_MS 3000
 #define INACTIVITY_MS       700000
 #define SESSION_REFRESH_MS  3000000   // 50 minutes: refresh pool authorization before dashboards expire workers
-#define MAX_INFLIGHT_SUBMISSIONS 4
-#define MAX_SUBMISSIONS_PER_LOOP 2
+#ifndef MAX_INFLIGHT_SUBMISSIONS
+#define MAX_INFLIGHT_SUBMISSIONS 8
+#endif
+#ifndef MAX_SUBMISSIONS_PER_LOOP
+#define MAX_SUBMISSIONS_PER_LOOP 4
+#endif
+#ifndef SUBMIT_QUEUE_WAIT_MS
+#define SUBMIT_QUEUE_WAIT_MS 100
+#endif
+#ifndef SUBMIT_QUEUE_MAX_AGE_MS
+#define SUBMIT_QUEUE_MAX_AGE_MS 30000
+#endif
 #define SUBMIT_STALL_MS     15000
 
 // ============================================================ 
@@ -108,6 +118,12 @@ static void clearSubmissions() {
     memset(s_pendingResponses, 0, sizeof(s_pendingResponses));
     s_pendingIndex = 0;
     s_consecutiveSubmitTimeouts = 0;
+    if (s_submitQueue) {
+        xQueueReset(s_submitQueue);
+    }
+}
+
+static void clearQueuedSubmissions() {
     if (s_submitQueue) {
         xQueueReset(s_submitQueue);
     }
@@ -289,6 +305,10 @@ static void parseMiningNotify(const String &line) {
     job.cleanJobs = params[8] | false;
     strncpy(job.extraNonce1, s_extraNonce1, STRATUM_EXTRANONCE_LEN - 1);
     job.extraNonce2Size = s_extraNonce2Size;
+
+    if (job.cleanJobs) {
+        clearQueuedSubmissions();
+    }
 
     s_lastActivity = millis();
     miner_start_job(&job);
@@ -752,6 +772,14 @@ void stratum_task(void *param) {
         while (countPendingResponses() < MAX_INFLIGHT_SUBMISSIONS &&
                sentThisLoop < MAX_SUBMISSIONS_PER_LOOP &&
                xQueueReceive(s_submitQueue, &entry, 0) == pdTRUE) {
+            if (entry.sentTime != 0 && millis() - entry.sentTime > SUBMIT_QUEUE_MAX_AGE_MS) {
+                Serial.printf("[STRATUM] Dropping queued stale share: job=%s diff=%.4f age=%lums\n",
+                              entry.jobId,
+                              entry.difficulty,
+                              millis() - entry.sentTime);
+                continue;
+            }
+
             submitShare(client, &entry);
             sentThisLoop++;
 
@@ -800,7 +828,11 @@ void stratum_task(void *param) {
 
 bool stratum_submit_share(const submit_entry_t *entry) {
     if (!s_submitQueue) return false;
-    return xQueueSend(s_submitQueue, entry, 0) == pdTRUE;
+    if (!s_isConnected) return false;
+
+    submit_entry_t queued = *entry;
+    queued.sentTime = millis();
+    return xQueueSend(s_submitQueue, &queued, pdMS_TO_TICKS(SUBMIT_QUEUE_WAIT_MS)) == pdTRUE;
 }
 
 void stratum_reconnect() {

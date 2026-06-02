@@ -330,7 +330,11 @@ static void hashCheck(const char *jobId, sha256_hash_t *ctx, uint32_t timestamp,
         submission.difficulty = shareDiff;
 
         if (!stratum_submit_share(&submission)) {
-            Serial.println("[MINER] Share submit queue full/disconnected, dropped");
+            if (!stratum_is_connected()) {
+                Serial.println("[MINER] Share submit dropped: Stratum disconnected");
+            } else {
+                Serial.println("[MINER] Share submit dropped: queue full");
+            }
         }
     }
 

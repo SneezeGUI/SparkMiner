@@ -17,7 +17,9 @@
 #define DESIRED_DIFFICULTY      0.0014
 #endif
 #define STRATUM_MSG_SIZE        512
-#define MAX_PENDING_SUBMISSIONS 30
+#ifndef MAX_PENDING_SUBMISSIONS
+#define MAX_PENDING_SUBMISSIONS 64
+#endif
 
 // Submission flags
 #define SUBMIT_FLAG_32BIT       0x02    // 32-bit share (difficulty >= 2^32)
