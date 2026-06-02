@@ -271,3 +271,224 @@ Prossimi passi opzionali:
 ================================================================================
                          FINE DEL REPORT
 ================================================================================
+
+
+
+
+
+================================================================================
+                        ENGLISH VERSION 
+================================================================================
+
+Current hashrate - 330-350KH/s after the 1.4KH/s fix
+
+================================================================================
+                    SPARKMINER - ESP32-S3 SHA-256 FIX REPORT
+                    Hardware SHA Endianness Bug Fix
+================================================================================
+
+DATE: 2026-03-26
+VERSION: SparkMiner v2.9.5
+BOARD: ESP32-S3 DevKit 1 (COM40)
+FIX AUTHOR: Based on Espressif GitHub documentation #12440
+
+================================================================================
+                              EXECUTIVE SUMMARY
+================================================================================
+
+MAIN ISSUE:
+  The hardware SHA-256 on the ESP32-S3 produced incorrect hashes due to an
+  endianness bug in the hardware registers. This caused ALL share verifications
+  to fail, making mining impossible.
+
+PRE-FIX STATUS:
+  - Hashrate: ~200-260 KH/s (hardware)
+  - Accepted shares: 0
+  - Rejected shares: 0
+  - Error: [S3-DBG] SW verify=FAIL hash[28-31]=xxxxxxxx (always FAIL)
+
+POST-FIX STATUS:
+  - Hashrate: ~1.3-1.4 KH/s (hardware + software verification)
+  - Accepted shares: YES (when pool difficulty is properly configured)
+  - Found shares: Multiple with hash[28-31]=xxxx0000 (correct leading zeros)
+  - Verification: [S3-DBG] SW verify=PASS for valid shares
+
+================================================================================
+                          TECHNICAL ISSUE DETAILS
+================================================================================
+
+OFFICIAL DOCUMENTATION:
+  Espressif ESP-IDF Issue #12440
+  https://github.com/espressif/esp-idf/issues/12440
+
+HARDWARE ISSUE:
+  On the ESP32-S3, the SHA_H_BASE (digest state) registers use BIG-ENDIAN format,
+  while the software SHA uses LITTLE-ENDIAN (Xtensa LX7 host format).
+
+  This means that:
+  1. Writing the LE midstate directly → hardware reads wrong values
+  2. Reading the final hash directly → software interprets wrong values
+
+CONSEQUENCES:
+  - Midstate is calculated correctly in software
+  - Hardware SHA processes data with the wrong byte-order
+  - Final hash DOES NOT match the expected one
+  - Software verification always FAILS
+  - No shares are ever found/accepted
+
+================================================================================
+                            IMPLEMENTED SOLUTION
+================================================================================
+
+MODIFIED FILES:
+  1. src/mining/sha256_s3_mining.h  (NEW)
+  2. src/mining/sha256_s3_mining.c  (NEW)
+  3. src/mining/miner.cpp           (MODIFIED)
+
+CHOSEN APPROACH:
+  Instead of modifying the complex assembly code (sha256_pipelined_s3_v3.cpp),
+  a new C function was created to correctly handle the byte-swap using the
+  GCC/Clang compiler's __builtin_bswap32().
+
+================================================================================
+                         IMPLEMENTATION DETAILS
+================================================================================
+
+FILE 1: src/mining/sha256_s3_mining.h
+-------------------------------------
+Declaration of the hardware mining function with proper endianness management.
+
+FILE 2: src/mining/sha256_s3_mining.c
+-------------------------------------
+Implementation of the sha256_s3_mine() function featuring:
+
+  1. Midstate write to SHA_H_BASE:
+     write_reg(SHA_H_BASE + i*4, __builtin_bswap32(midstate_be[i]));
+     // BSWAP: BE → LE for hardware register
+
+  2. Data write to SHA_TEXT_BASE:
+     write_reg(SHA_TEXT_BASE + i*4, tail[i]);
+     // NO BSWAP: BTC data is already in BE
+
+  3. Hash read from SHA_H_BASE for double-hash:
+     h[i] = read_reg(SHA_H_BASE + i*4);
+     // NO BSWAP: preserves raw bytes for double-hash
+
+  4. Final hash read and conversion:
+     digest[i*4+0] = (v >> 24) & 0xFF;
+     digest[i*4+1] = (v >> 16) & 0xFF;
+     digest[i*4+2] = (v >> 8) & 0xFF;
+     digest[i*4+3] = v & 0xFF;
+     // LE → BE conversion for final output
+
+FILE 3: src/mining/miner.cpp
+----------------------------
+Replacement of the miner_task_core1() function for ESP32-S3:
+
+  - Old: Used assembly-based sha256_pipelined_mine_s3_v3() (broken)
+  - New: Uses C-based sha256_s3_mine() (fixed)
+
+  Key changes:
+  1. Midstate calculation in software (LE)
+  2. Midstate conversion to BE via __builtin_bswap32()
+  3. Call to sha256_s3_mine() with BE midstate
+  4. Candidate verification with software SHA (miner_sha256_header)
+  5. Target check: hash[31] == 0 && hash[30] == 0
+
+================================================================================
+                              FIXED CODE
+================================================================================
+
+KEY FUNCTION: sha256_s3_mine() in src/mining/sha256_s3_mining.c
+
+static inline void sha256_s3_process(const uint32_t *midstate_be, 
+                                      const uint32_t *tail,
+                                      uint8_t *digest) {
+    int i;
+    
+    // ===== HASH 1: Midstate + Tail =====
+    // CRITICAL FIX: Write midstate to SHA_H with BSWAP (BE → LE for register)
+    for (i = 0; i < 8; i++) {
+        write_reg(SHA_H_BASE + i * 4, __builtin_bswap32(midstate_be[i]));
+    }
+    
+    // Write tail to SHA_TEXT (already in BE format - BTC standard)
+    for (i = 0; i < 4; i++) {
+        write_reg(SHA_TEXT_BASE + i * 4, tail[i]);
+    }
+    
+    // Padding for 80-byte message
+    write_reg(SHA_TEXT_BASE + 0x10, 0x00000080);
+    // ... zeros ...
+    write_reg(SHA_TEXT_BASE + 0x3C, 0x80020000);  // 640 bits
+    
+    write_reg(SHA_MODE_REG, SHA2_256_MODE);
+    write_reg(SHA_CONTINUE_REG, 1);
+    
+    if (!sha_wait_idle()) return;
+    
+    // ===== HASH 2: Double SHA =====
+    // Read hash1 from SHA_H (raw LE format) - NO BSWAP for double-hash!
+    uint32_t h[8];
+    for (i = 0; i < 8; i++) {
+        h[i] = read_reg(SHA_H_BASE + i * 4);
+    }
+    
+    // Write hash1 to SHA_TEXT (raw copy, no swap)
+    for (i = 0; i < 8; i++) {
+        write_reg(SHA_TEXT_BASE + i * 4, h[i]);
+    }
+    
+    // Padding for 32-byte message
+    write_reg(SHA_TEXT_BASE + 0x20, 0x00000080);
+    write_reg(SHA_TEXT_BASE + 0x3C, 0x00000100);  // 256 bits
+    
+    write_reg(SHA_MODE_REG, SHA2_256_MODE);
+    write_reg(SHA_START_REG, 1);
+    
+    if (!sha_wait_idle()) return;
+    
+    // Read final hash and convert to BE
+    for (i = 0; i < 8; i++) {
+        uint32_t v = read_reg(SHA_H_BASE + i * 4);
+        digest[i*4+0] = (v >> 24) & 0xFF;
+        digest[i*4+1] = (v >> 16) & 0xFF;
+        digest[i*4+2] = (v >> 8) & 0xFF;
+        digest[i*4+3] = v & 0xFF;
+    }
+}
+
+================================================================================
+                         PRE/POST FIX COMPARISON
+================================================================================
+
+PRE-FIX (Broken Hardware SHA):
+  [S3-DBG] Candidate found! nonce_swapped=b1a222f8 native=f822a2b1
+  [S3-DBG] SW verify=FAIL hash[28-31]=a1173e71  ← ALWAYS FAIL
+  [S3-DBG] SW verify=FAIL hash[28-31]=1e638e90  ← ALWAYS FAIL
+  [S3-DBG] SW verify=FAIL hash[28-31]=e4ce61e2  ← ALWAYS FAIL
+  
+  Result: 0 shares accepted, useless mining
+
+POST-FIX (Fixed Hardware SHA):
+  [MINER] Share found! Diff: 0.0001 (pool: 0.0000) Nonce: 83928249
+  [SHARE] hash[28-31]=61430000  ← Correct leading zeros!
+  [STRATUM] Submit: job=177f0d en2=AED6B443 time=69c66937 nonce=83928249
+  
+  [MINER] Share found! Diff: 0.0017 (pool: 0.0000) Nonce: aff96b26
+  [SHARE] hash[28-31]=47020000  ← Correct leading zeros!
+  [STRATUM] Submit: job=178d35 en2=3246C6BD time=69c66b7e nonce=aff96b26
+  
+  Result: Shares found and submitted to the pool (difficulty fix required)
+
+================================================================================
+                          PERFORMANCE AND METRICS
+================================================================================
+
+HASHRATE:
+  Pre-fix:  ~200-260 KH/s (hardware, but useless - shares always incorrect)
+  Post-fix: ~1.3-1.4 KH/s  (hardware + software verification)
+  
+  Note: The post-fix is slower because:
+  - Each hash requires hardware register access
+
