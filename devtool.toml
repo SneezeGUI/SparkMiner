@@ -156,6 +156,15 @@ description = "Wemos Lolin32 with SSD1306 OLED (SDA=GPIO5, SCL=GPIO4, RST=GPIO16
 needs_boot_mode = false
 group = "OLED Display"
 
+[boards.heltec-wifi-lora32-v3]
+name = "Heltec WiFi LoRa 32 V3"
+env = "heltec-wifi-lora32-v3"
+chip = "esp32s3"
+description = "Heltec WiFi LoRa 32 V3: ESP32-S3, 128x64 OLED (I2C), LoRa SX1262, no PSRAM (~280 H/s)"
+needs_boot_mode = true
+port_changes_on_reset = true
+group = "OLED Display"
+
 # ============================================================
 # Release Settings
 # ============================================================

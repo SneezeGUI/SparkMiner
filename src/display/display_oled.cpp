@@ -216,10 +216,25 @@ static void drawStatsScreen(const display_data_t *data) {
 void oled_display_init(uint8_t rotation, uint8_t brightness) {
     Serial.printf("[OLED] Initializing %dx%d display\n", OLED_WIDTH, OLED_HEIGHT);
 
-    // Initialize I2C with custom pins
+
+#ifdef HELTEC_V3
+    Serial.println("HELTEC: Enabling Vext (GPIO36 LOW)");
+    pinMode(VEXT_PIN, OUTPUT);
+    digitalWrite(VEXT_PIN, LOW); // Vext ON (active low)
+    delay(50);
+
+    Serial.println("HELTEC: Resetting OLED (GPIO21)");
+    pinMode(OLED_RST_PIN, OUTPUT);
+    digitalWrite(OLED_RST_PIN, LOW);
+    delay(20);
+    digitalWrite(OLED_RST_PIN, HIGH);
+    delay(20);
+
+    Serial.println("HELTEC: Starting I2C (17,18)");
+#endif
     Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
 
-    // Initialize U8g2
+    Serial.println("Initializing SSD1306 OLED with U8g2 library");
     s_u8g2.begin();
 
     // Set rotation
@@ -236,6 +251,9 @@ void oled_display_init(uint8_t rotation, uint8_t brightness) {
 
     // Show boot screen
     oled_display_show_boot();
+
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW); // Off by default
 
     Serial.println("[OLED] Display initialized");
 }

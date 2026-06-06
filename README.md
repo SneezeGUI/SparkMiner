@@ -134,6 +134,7 @@ Find your board below and download the matching firmware from [Releases](https:/
 | **Wemos/Lolin S3 Mini** | `esp32-s3-mini_firmware.bin` | RGB LED status indicator |
 | **WeAct S3 Mini** | `esp32-s3-mini_firmware.bin` | Compatible with Lolin |
 | **ESP32-S3 + SSD1306 OLED** | `esp32-s3-oled_firmware.bin` | 128x64 I2C OLED |
+| **Heltec WiFi LoRa 32 V3** | `heltec-wifi-lora32-v3_firmware.bin` | ESP32-S3, 128x64 OLED, LoRa SX1262 |
 
 ### ESP32-C3 Boards
 
@@ -179,6 +180,7 @@ Find your board below and download the matching firmware from [Releases](https:/
 | Wemos Lolin32 + OLED | ✅ Full | 128x64 SSD1306 I2C (SDA=GPIO5, SCL=GPIO4, RST=GPIO16, addr=0x3C) |
 | ESP32-S3/C3 Mini | ✅ Full | RGB LED status |
 | ESP32 Headless | ✅ Full | GPIO LED status indicator |
+| Heltec WiFi LoRa 32 V3 | ✅ Full | ESP32-S3, 128x64 OLED, LoRa SX1262 |
 | LILYGO T-Display S3 | ❌ None | Not yet supported |
 | LILYGO T-Display V1 | ❌ None | Not yet supported |
 | ESP32-S2 boards | ❌ None | Single-core not supported |
