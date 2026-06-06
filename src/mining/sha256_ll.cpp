@@ -19,6 +19,8 @@
 #include <sha/sha_parallel_engine.h>
 #endif
 
+static volatile uint32_t s_wait_idle_timeouts = 0;
+
 // =============================================================================
 // Platform-specific register definitions
 // =============================================================================
@@ -69,11 +71,17 @@ void IRAM_ATTR sha256_ll_wait_idle(void) {
     uint32_t timeout = 20000;
 #if defined(CONFIG_IDF_TARGET_ESP32)
     while (DPORT_REG_READ(SHA_256_BUSY_REG)) {
-        if (--timeout == 0) break;
+        if (--timeout == 0) {
+            s_wait_idle_timeouts++;
+            break;
+        }
     }
 #else
     while (REG_READ(SHA_BUSY_REG)) {
-        if (--timeout == 0) break;
+        if (--timeout == 0) {
+            s_wait_idle_timeouts++;
+            break;
+        }
     }
 #endif
 }

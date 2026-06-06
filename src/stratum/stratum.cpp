@@ -12,18 +12,19 @@
 #include <board_config.h>
 #include "stratum.h"
 #include "../mining/miner.h"
+#include "../logging.h"
 
-// ============================================================ 
+// ============================================================
 // Constants
-// ============================================================ 
+// ============================================================
 #define STRATUM_MSG_BUFFER  512
 #define RESPONSE_TIMEOUT_MS 3000
 #define KEEPALIVE_MS        120000
 #define INACTIVITY_MS       700000
 
-// ============================================================ 
+// ============================================================
 // Global State
-// ============================================================ 
+// ============================================================
 static QueueHandle_t s_submitQueue = NULL;
 static submit_entry_t s_pendingResponses[MAX_PENDING_SUBMISSIONS];
 static uint16_t s_pendingIndex = 0;
@@ -54,9 +55,9 @@ static int s_extraNonce2Size = 4;
 // JSON document for parsing
 static StaticJsonDocument<4096> s_doc;
 
-// ============================================================ 
+// ============================================================
 // Utility Functions
-// ============================================================ 
+// ============================================================
 
 static uint32_t getNextId() {
     if (s_messageId == UINT32_MAX) {
@@ -86,7 +87,7 @@ static String readBoundedLine(WiFiClient& client, size_t maxLen = 4096) {
     String line;
     line.reserve(256);  // Initial allocation
     unsigned long start = millis();
-    
+
     while (client.connected() && (millis() - start < 5000)) {
         if (client.available()) {
             char c = client.read();
@@ -111,9 +112,9 @@ static String readBoundedLine(WiFiClient& client, size_t maxLen = 4096) {
     return line;
 }
 
-// ============================================================ 
+// ============================================================
 // Protocol Functions
-// ============================================================ 
+// ============================================================
 
 static bool sendMessage(WiFiClient &client, const char *msg) {
     if (!client.connected()) return false;
@@ -326,7 +327,12 @@ static void handleServerMessage(WiFiClient &client) {
 
 // Helper: Read lines until we get a response with matching ID (or timeout)
 // Handles method calls (set_difficulty, notify) that arrive before the response
+// IMPORTANT: This function properly handles out-of-order JSON-RPC responses,
+// which is normal in async Stratum v1 - the server may send mining.notify or
+// mining.set_difficulty before responding to your mining.authorize request.
 static bool waitForResponseById(WiFiClient &client, uint32_t expectedId, String &outResponse, int maxAttempts = 10) {
+    int outOfOrderCount = 0;
+
     for (int attempt = 0; attempt < maxAttempts; attempt++) {
         String line = readBoundedLine(client);  // Use bounded read to prevent OOM
         line.trim();
@@ -348,12 +354,16 @@ static bool waitForResponseById(WiFiClient &client, uint32_t expectedId, String 
         if (s_doc.containsKey("method")) {
             const char *method = s_doc["method"];
 
-            // Handle set_difficulty immediately since it's important
+            // Handle set_difficulty and notify immediately - both may arrive before
+            // the auth response, and discarding notify means no jobs until the next block.
             if (strcmp(method, "mining.set_difficulty") == 0) {
                 double diff = s_doc["params"][0] | 1.0;
                 if (!isnan(diff) && diff > 0) {
                     miner_set_difficulty(diff);
+                    dbg("[STRATUM] Set difficulty via async method: %.6f\n", diff);
                 }
+            } else if (strcmp(method, "mining.notify") == 0) {
+                parseMiningNotify(line);
             }
             // Continue reading for our actual response
             continue;
@@ -366,11 +376,22 @@ static bool waitForResponseById(WiFiClient &client, uint32_t expectedId, String 
                 outResponse = line;
                 return true;
             }
-            Serial.printf("[STRATUM] Got response for different id: %lu (expected %lu)\n", respId, expectedId);
+            // Log out-of-order responses but continue searching
+            outOfOrderCount++;
+            Serial.printf("[STRATUM] Received response id=%lu (expected %lu, attempt %d/%d)\n",
+                          respId, expectedId, attempt + 1, maxAttempts);
+
+            // If we get more than 2 out-of-order responses, assume the server
+            // is misbehaving or our request was not received. Bail after max attempts.
+            if (outOfOrderCount > 2) {
+                Serial.printf("[STRATUM] Multiple out-of-order responses detected, giving up after %d attempts\n",
+                              attempt + 1);
+                return false;
+            }
         }
     }
 
-    Serial.println("[STRATUM] Max attempts reached waiting for response");
+    Serial.printf("[STRATUM] Max attempts reached waiting for response id=%lu\n", expectedId);
     return false;
 }
 
@@ -424,7 +445,7 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
     } else {
         safeStrCpy(fullUsername, wallet, sizeof(fullUsername));
     }
-    
+
     // Store authorized worker name for submissions
     safeStrCpy(s_authorizedWorkerName, fullUsername, sizeof(s_authorizedWorkerName));
 
@@ -496,9 +517,9 @@ static void submitShare(WiFiClient &client, const submit_entry_t *entry) {
     }
 }
 
-// ============================================================ 
+// ============================================================
 // Public API
-// ============================================================ 
+// ============================================================
 
 void stratum_init() {
     // Create submission queue
@@ -521,7 +542,8 @@ void stratum_task(void *param) {
     uint32_t lastConnectAttempt = 0;
     uint32_t backupConnectTime = 0;
 
-    Serial.printf("[STRATUM] Task started on core %d\n", xPortGetCoreID());
+    log_wait_startup_barrier();
+    log_linef("[STRATUM] Task started on core %d", xPortGetCoreID());
 
     while (true) {
         // Wait for WiFi with auto-reconnect (Issue #4 fix)
@@ -530,7 +552,7 @@ void stratum_task(void *param) {
                 miner_stop();
                 client.stop();
                 s_isConnected = false;
-                Serial.println("[WIFI] Connection lost, attempting reconnect...");
+                log_line("[WIFI] Connection lost, attempting reconnect...");
             }
 
             // Calculate exponential backoff: 1s, 2s, 4s, 8s, 15s max
@@ -540,8 +562,8 @@ void stratum_task(void *param) {
             if (millis() - s_lastWifiReconnectAttempt >= backoffMs) {
                 s_wifiReconnectAttempts++;
                 s_lastWifiReconnectAttempt = millis();
-                Serial.printf("[WIFI] Reconnect attempt %lu (backoff: %lums)\n",
-                              s_wifiReconnectAttempts, backoffMs);
+                log_linef("[WIFI] Reconnect attempt %lu (backoff: %lums)",
+                          s_wifiReconnectAttempts, backoffMs);
                 WiFi.reconnect();
             }
 
@@ -551,7 +573,7 @@ void stratum_task(void *param) {
 
         // WiFi connected - reset reconnect counter
         if (s_wifiReconnectAttempts > 0) {
-            Serial.printf("[WIFI] Reconnected after %lu attempts\n", s_wifiReconnectAttempts);
+            log_linef("[WIFI] Reconnected after %lu attempts", s_wifiReconnectAttempts);
             s_wifiReconnectAttempts = 0;
         }
 
@@ -587,8 +609,8 @@ void stratum_task(void *param) {
 
             usingBackup = false;
 
-            Serial.printf("[STRATUM] Connecting to %s:%d...\n",
-                s_primaryPool.url, s_primaryPool.port);
+            log_linef("[STRATUM] Connecting to %s:%d...",
+                      s_primaryPool.url, s_primaryPool.port);
 
             // STABILITY FIX: Use connect timeout (10s) to prevent long blocks
             if (client.connect(s_primaryPool.url, s_primaryPool.port, 10000)) {
@@ -596,17 +618,17 @@ void stratum_task(void *param) {
                     s_isConnected = true;
                     s_lastActivity = millis();
                     safeStrCpy(s_currentPoolUrl, s_primaryPool.url, MAX_POOL_URL_LEN);
-                    Serial.println("[STRATUM] Connected to primary pool");
+                    log_line("[STRATUM] Connected to primary pool");
                 } else {
                     client.stop();
                 }
             } else {
-                Serial.println("[STRATUM] Connection failed");
+                log_line("[STRATUM] Connection failed");
 
                 // Try backup pool after 30s of failures
                 if (s_hasBackupPool && (millis() - lastConnectAttempt > POOL_FAILOVER_MS)) {
-                    Serial.printf("[STRATUM] Trying backup: %s:%d\n",
-                        s_backupPool.url, s_backupPool.port);
+                    log_linef("[STRATUM] Trying backup: %s:%d",
+                              s_backupPool.url, s_backupPool.port);
 
                     // STABILITY FIX: Use connect timeout (10s)
                     if (client.connect(s_backupPool.url, s_backupPool.port, 10000)) {
@@ -616,7 +638,7 @@ void stratum_task(void *param) {
                             backupConnectTime = millis();
                             s_lastActivity = millis();
                             safeStrCpy(s_currentPoolUrl, s_backupPool.url, MAX_POOL_URL_LEN);
-                            Serial.println("[STRATUM] Connected to backup pool");
+                            log_line("[STRATUM] Connected to backup pool");
                         } else {
                             client.stop();
                         }
@@ -647,7 +669,7 @@ void stratum_task(void *param) {
                     testClient.stop();  // Clean up the old (now empty) client
                     usingBackup = false;
                     safeStrCpy(s_currentPoolUrl, s_primaryPool.url, MAX_POOL_URL_LEN);
-                    Serial.println("[STRATUM] Switched back to primary pool");
+                    log_line("[STRATUM] Switched back to primary pool");
                     continue;
                 } else {
                     testClient.stop();
@@ -680,7 +702,7 @@ void stratum_task(void *param) {
 
         // Check for inactivity
         if (millis() - s_lastActivity > INACTIVITY_MS) {
-            Serial.println("[STRATUM] Pool inactive, disconnecting");
+            log_line("[STRATUM] Pool inactive, disconnecting");
             miner_stop();
             client.stop();
             s_isConnected = false;

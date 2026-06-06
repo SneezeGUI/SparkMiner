@@ -217,10 +217,8 @@ bool IRAM_ATTR sha256_pipelined_mine_s3(
         "beqz.n a3, proc_end_s3 \n"
 
         // ===== EARLY REJECT: Check H0 upper 16 bits =====
-        // For logical H0=0x0000XXXX (share), raw register = 0xXXXX0000
-        // So we check if LOWER 16 bits of raw are zero (= upper 16 bits of logical)
         "l32i.n a3, %[sha_h], 0 \n"       // Load full H0 word (raw LE value)
-        "extui  a3, a3, 0, 16   \n"       // Extract lower 16 bits (= upper 16 of logical)
+        "extui  a3, a3, 16, 16  \n"       // Extract upper 16 bits
         "beqz.n a3, proc_end_s3 \n"       // Exit if potential share
         "j proc_start_s3        \n"
 

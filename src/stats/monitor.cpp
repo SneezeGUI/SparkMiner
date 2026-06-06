@@ -14,6 +14,7 @@
 #include "../stratum/stratum.h"
 #include "../config/nvs_config.h"
 #include "../config/wifi_manager.h"
+#include "../logging.h"
 
 // Update intervals
 #define DISPLAY_UPDATE_MS   1000    // 1 second
@@ -32,6 +33,37 @@ static uint32_t s_lastActivityTime = 0;  // Screen timeout tracking
 static bool s_earlySaveDone = false;      // Track if we've done the early save
 static uint32_t s_lastAcceptedCount = 0;  // Track shares for first-share save
 static uint32_t s_lastLedShareCount = 0;  // Track shares for LED flash
+
+extern TaskHandle_t miner0Task;
+extern TaskHandle_t miner1Task;
+extern TaskHandle_t stratumTask;
+extern TaskHandle_t monitorTask;
+extern TaskHandle_t buttonTask;
+
+static char taskStateChar(TaskHandle_t handle) {
+    if (handle == NULL) {
+        return '-';
+    }
+
+#if (INCLUDE_eTaskGetState == 1)
+    switch (eTaskGetState(handle)) {
+        case eRunning:
+            return 'R';
+        case eReady:
+            return 'Y';
+        case eBlocked:
+            return 'B';
+        case eSuspended:
+            return 'S';
+        case eDeleted:
+            return 'D';
+        default:
+            return '?';
+    }
+#else
+    return 'A';
+#endif
+}
 
 // Track session start values to calculate deltas for persistence
 static uint64_t s_sessionStartHashes = 0;
@@ -67,7 +99,8 @@ static void updateDisplayData(display_data_t *data) {
     data->uptimeSeconds = (millis() - s_startTime) / 1000;
     data->avgLatency = mstats->avgLatency;
 
-    // Calculate hashrate with EMA smoothing
+    // Calculate display hashrate from the same live window family as the console.
+    // Expose both the raw live window and a smoothed value for the UI.
     static uint64_t lastHashes = 0;
     static uint32_t lastHashTime = 0;
     static double smoothedHashRate = 0.0;
@@ -80,19 +113,17 @@ static void updateDisplayData(display_data_t *data) {
         uint64_t deltaHashes = mstats->hashes - lastHashes;
         double instantRate = (double)deltaHashes * 1000.0 / elapsed;
 
-        // Exponential moving average (alpha=0.15 for smooth but responsive updates)
-        // Lower alpha = smoother but slower to respond
-        // Higher alpha = more responsive but jumpier
-        const double alpha = 0.15;
+        data->hashRate = instantRate;
 
+        const double alpha = 0.15;
         if (firstSample) {
             smoothedHashRate = instantRate;
             firstSample = false;
         } else {
             smoothedHashRate = alpha * instantRate + (1.0 - alpha) * smoothedHashRate;
         }
+        data->hashRateAvg = smoothedHashRate;
 
-        data->hashRate = smoothedHashRate;
         lastHashes = mstats->hashes;
         lastHashTime = now;
     }
@@ -208,7 +239,8 @@ void monitor_reset_activity() {
 }
 
 void monitor_task(void *param) {
-    Serial.printf("[MONITOR] Task started on core %d\n", xPortGetCoreID());
+    log_wait_startup_barrier();
+    log_linef("[MONITOR] Task started on core %d", xPortGetCoreID());
 
     if (!s_initialized) {
         monitor_init();
@@ -253,21 +285,64 @@ void monitor_task(void *param) {
                 }
             #endif
 
-            // Also print to serial for headless/debug
+            // Serial stats: printed every STATS_UPDATE_MS (10s)
+            // All rates (total + per-core) are computed from the same delta window
+            // so: total H/s == Core0 H/s + Core1 H/s, and percentages sum to 100%.
+            // displayData.hashRate (EMA-smoothed) is used only for the display, not here.
             static uint32_t lastSerialPrint = 0;
             if (now - lastSerialPrint >= 10000) {
-                Serial.printf("[STATS] Hashrate: %.2f H/s | Shares: %u/%u | Ping: %u ms | Best: %.4f\n",
-                    displayData.hashRate,
+                extern volatile uint64_t s_core0Hashes;
+                extern volatile uint64_t s_core1Hashes;
+                static uint64_t lastCore0 = 0, lastCore1 = 0;
+                static uint32_t lastStatsTime = 0;
+                static uint32_t lastHealthPrint = 0;
+                static uint32_t lastHealthAccepted = 0;
+                static uint32_t lastHealthRejected = 0;
+
+                // Snapshot counters atomically (best-effort; volatile reads)
+                uint64_t snap0 = s_core0Hashes;
+                uint64_t snap1 = s_core1Hashes;
+                uint32_t statsElapsed = (lastStatsTime > 0) ? (now - lastStatsTime) : 10000;
+
+                double c0hs = 0.0, c1hs = 0.0, totalHs = 0.0;
+                double c0pct = 0.0, c1pct = 0.0;
+                if (lastStatsTime > 0 && statsElapsed > 0) {
+                    uint64_t d0 = snap0 - lastCore0;
+                    uint64_t d1 = snap1 - lastCore1;
+                    c0hs = (double)d0 * 1000.0 / statsElapsed;
+                    c1hs = (double)d1 * 1000.0 / statsElapsed;
+                    totalHs = c0hs + c1hs;
+                    if (totalHs > 0.0) {
+                        c0pct = c0hs / totalHs * 100.0;
+                        c1pct = c1hs / totalHs * 100.0;
+                    }
+                }
+
+                // Total line: rate is derived from per-core sum (not EMA)
+                extern volatile uint32_t s_jobChanges;
+                Serial.printf("[STATS] Total: %.1f H/s (window %lus) | Shares: %u/%u | Ping: %u ms | Best: %.4f | Jobs: %lu (chg: %lu)\n",
+                    totalHs,
+                    (unsigned long)(statsElapsed / 1000),
                     displayData.sharesAccepted,
                     displayData.sharesAccepted + displayData.sharesRejected,
                     displayData.avgLatency,
-                    displayData.bestDifficulty);
-                
+                    displayData.bestDifficulty,
+                    (unsigned long)miner_get_stats()->templates,
+                    (unsigned long)s_jobChanges);
+                Serial.printf("[STATS] Core0: %.1f H/s (%.0f%%, total %llu) | Core1: %.1f H/s (%.0f%%, total %llu)\n",
+                    c0hs, c0pct, snap0, c1hs, c1pct, snap1);
+
                 if (displayData.poolName) {
-                    Serial.printf("[STATS] Pool: %s (%d workers) %s\n", 
-                        displayData.poolName, 
-                        displayData.poolWorkersTotal,
-                        (displayData.poolFailovers > 0) ? "[FAILOVER]" : "");
+                    if (displayData.poolWorkersTotal > 0) {
+                        Serial.printf("[STATS] Pool: %s (%d workers) %s\n",
+                            displayData.poolName,
+                            displayData.poolWorkersTotal,
+                            (displayData.poolFailovers > 0) ? "[FAILOVER]" : "");
+                    } else {
+                        Serial.printf("[STATS] Pool: %s (workers: n/a) %s\n",
+                            displayData.poolName,
+                            (displayData.poolFailovers > 0) ? "[FAILOVER]" : "");
+                    }
                 }
 
                 if (displayData.btcPrice > 0) {
@@ -277,25 +352,50 @@ void monitor_task(void *param) {
                         displayData.halfHourFee);
                 }
 
-                // DEBUG: Per-core hash contribution
-                extern volatile uint64_t s_core0Hashes;
-                extern volatile uint64_t s_core1Hashes;
-                Serial.printf("[STATS] Core0: %llu hashes, Core1: %llu hashes\n", s_core0Hashes, s_core1Hashes);
+                lastCore0 = snap0;
+                lastCore1 = snap1;
+                lastStatsTime = now;
 
-                // Heap monitoring - track memory usage over time
+                // Heap monitoring
                 uint32_t freeHeap = ESP.getFreeHeap();
                 uint32_t minFreeHeap = ESP.getMinFreeHeap();
                 uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
-
-                // Always log heap stats for debugging memory leaks
                 Serial.printf("[HEAP] Free: %lu | Min: %lu | MaxAlloc: %lu\n",
                     freeHeap, minFreeHeap, maxAllocHeap);
-
-                // Warn if critically low (under 30KB)
                 if (freeHeap < 30000) {
                     Serial.println("[HEAP] CRITICAL: Memory very low - may crash soon!");
                 } else if (freeHeap < 50000) {
                     Serial.println("[HEAP] WARNING: Memory getting low");
+                }
+
+                if (lastHealthPrint == 0) {
+                    lastHealthPrint = now;
+                    lastHealthAccepted = displayData.sharesAccepted;
+                    lastHealthRejected = displayData.sharesRejected;
+                } else if (now - lastHealthPrint >= 60000) {
+                    uint32_t acceptedDelta = displayData.sharesAccepted - lastHealthAccepted;
+                    uint32_t rejectedDelta = displayData.sharesRejected - lastHealthRejected;
+                    const char *wifiState = displayData.wifiConnected ? "up" : "down";
+                    const char *poolState = displayData.poolConnected ? "up" : "down";
+
+                    Serial.printf(
+                        "[HEALTH] hs=%.1f minHeap=%lu A/R=+%lu/+%lu wifi=%s pool=%s tasks{m0:%c,m1:%c,str:%c,mon:%c,btn:%c}\n",
+                        totalHs,
+                        minFreeHeap,
+                        (unsigned long)acceptedDelta,
+                        (unsigned long)rejectedDelta,
+                        wifiState,
+                        poolState,
+                        taskStateChar(miner0Task),
+                        taskStateChar(miner1Task),
+                        taskStateChar(stratumTask),
+                        taskStateChar(monitorTask),
+                        taskStateChar(buttonTask)
+                    );
+
+                    lastHealthAccepted = displayData.sharesAccepted;
+                    lastHealthRejected = displayData.sharesRejected;
+                    lastHealthPrint = now;
                 }
 
                 lastSerialPrint = now;

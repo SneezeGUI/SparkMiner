@@ -581,6 +581,16 @@ class DevTool:
 
     def get_firmware_path(self, board: BoardConfig) -> Optional[Path]:
         """Find firmware file for a board"""
+        is_xiao_s3 = board.key.startswith("seeed-xiao-esp32s3") or board.env.startswith("seeed-xiao-esp32s3")
+
+        # Guard: never pick *_factory.bin for XIAO S3 unless merge layout is explicitly verified.
+        # XIAO should use standard PlatformIO upload path (bootloader/partitions/app offsets).
+        if is_xiao_s3:
+            build_fw = self.script_dir / ".pio" / "build" / board.env / "firmware.bin"
+            if build_fw.exists():
+                return build_fw
+            return None
+
         # Check release firmware first (try friendly key name, then env name)
         version = self.get_version()
         fw_dir = self.get_firmware_dir() / version
@@ -623,6 +633,8 @@ class DevTool:
             print(f"{c('[ERROR]', Colors.RED)} No board selected!")
             return False
 
+        is_xiao_s3 = board.key.startswith("seeed-xiao-esp32s3") or board.env.startswith("seeed-xiao-esp32s3")
+
         firmware = self.get_firmware_path(board)
         if not firmware:
             print(f"{c('[ERROR]', Colors.RED)} No firmware found! Build first.")
@@ -646,6 +658,25 @@ class DevTool:
         if interactive and board.needs_boot_mode:
             self.print_bootloader_instructions()
             input(f"\n{c('[?]', Colors.CYAN)} Press ENTER when in download mode...")
+
+        if is_xiao_s3:
+            print(f"{c('[INFO]', Colors.YELLOW)} XIAO S3 guard active: skipping factory-bin flashing path")
+            cmd = self.get_pio_cmd() + [
+                "run",
+                "-e", board.env,
+                "-t", "upload",
+                "--upload-port", port,
+            ]
+
+            result = self.run_cmd(cmd)
+
+            if result and result.returncode == 0:
+                print(f"\n{c('[SUCCESS]', Colors.GREEN)} Upload completed via PlatformIO!")
+                self.current_port = port
+                return True
+            else:
+                print(f"\n{c('[ERROR]', Colors.RED)} Upload failed!")
+                return False
 
         flash_addr = "0x0" if "factory" in firmware.name else "0x10000"
 
@@ -701,7 +732,12 @@ class DevTool:
         print(f"  Exit: Ctrl+C")
         print(f"{c('=' * 60, Colors.CYAN)}\n")
 
-        cmd = self.get_pio_cmd() + ["device", "monitor", "-b", str(board.monitor_baud), "-p", port]
+        cmd = self.get_pio_cmd() + [
+            "device", "monitor",
+            "-e", board.env,
+            "-b", str(board.monitor_baud),
+            "-p", port
+        ]
 
         # Add filters
         for f in self.config.monitor_filters:

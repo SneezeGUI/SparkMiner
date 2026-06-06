@@ -55,7 +55,7 @@ void IRAM_ATTR sha256_s3_init_zeros(void) {
  */
 bool IRAM_ATTR sha256_pipelined_mine_s3_v3(
     const uint32_t *midstate,           // Pre-computed midstate (8 words)
-    const uint32_t *block2_words,       // Block 2 words 0-2 (merkle_tail, timestamp, nbits) - swapped
+    const uint32_t *block2_words,       // Block 2 words 0-2 + word3(stop_plus1_swapped)
     uint32_t *nonce_ptr,                // Current nonce (big-endian/swapped)
     volatile uint64_t *hash_count_ptr,
     volatile bool *mining_flag
@@ -204,10 +204,21 @@ bool IRAM_ATTR sha256_pipelined_mine_s3_v3(
         "l8ui     a3, %[flag], 0      \n"
         "beqz.n   a3, exit_v3         \n"
 
+        // Stop exactly at swapped-space end boundary (end+1 stored in block2_words[3]).
+        "l32i.n   a3, a6, 12          \n"
+        "beq      a2, a3, exit_v3     \n"
+
         // ===== PHASE 11: Early reject =====
+        // SHA_H registers are byte-swapped relative to logical SHA-256 words on S3,
+        // so leading-zero check for logical H0[31:16] maps to RAW lower/upper halves
+        // depending on read path. Here the inline-ASM path must match software verify,
+        // which is equivalent to checking RAW upper 16 bits on this code path.
         "l32i     a3, a7, 0x40        \n"    // SHA_H[0]
-        "extui    a3, a3, 0, 16       \n"    // Lower 16 bits
+        "extui    a3, a3, 16, 16      \n"    // Upper 16 bits
         "beqz.n   a3, exit_v3         \n"    // Exit if potential share
+
+        // Stop exactly at swapped-space end boundary.
+        "beq      a2, a9, exit_v3     \n"
 
         // Continue
         "j        loop_start_v3       \n"
@@ -222,7 +233,7 @@ bool IRAM_ATTR sha256_pipelined_mine_s3_v3(
           [ih] "r"(hash_count_ptr),
           [nonce] "r"(nonce_ptr),
           [flag] "r"(mining_flag)
-        : "a2", "a3", "a4", "a5", "a6", "a7", "a8", "memory"
+                : "a2", "a3", "a4", "a5", "a6", "a7", "a8", "memory"
     );
 
     return *mining_flag;

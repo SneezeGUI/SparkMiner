@@ -28,12 +28,15 @@ extern "C" {
 
 #include <board_config.h>
 #include "mining/miner.h"
+#include "mining/baseline_benchmark.h"
 #include "stratum/stratum_types.h"
 #include "stratum/stratum.h"
 #include "config/nvs_config.h"
 #include "config/wifi_manager.h"
 #include "stats/monitor.h"
 #include "display/display.h"
+#include "logging.h"
+#include <build_info_auto.h>
 
 // Task handles
 TaskHandle_t miner0Task = NULL;
@@ -46,8 +49,11 @@ TaskHandle_t buttonTask = NULL;
 volatile bool systemReady = false;
 
 // Button handling (OneButton)
-#if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
+#if defined(BUTTON_PIN) && BUTTON_PIN >= 0 && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
 OneButton button(BUTTON_PIN, true, true);  // active low, enable pullup
+#ifdef USER_BUTTON_PIN
+OneButton userButton(USER_BUTTON_PIN, true, true);
+#endif
 
 // Single click: wake screen if off, otherwise cycle screens
 void onButtonClick() {
@@ -58,6 +64,13 @@ void onButtonClick() {
     }
     display_next_screen();
 }
+
+#ifdef HELTEC_V3
+void log_heltec_pins() {
+    Serial.printf("[HeltecV3] OLED SDA=%d SCL=%d RST=%d VEXT=%d\n", OLED_SDA_PIN, OLED_SCL_PIN, OLED_RST_PIN, VEXT_PIN);
+    Serial.printf("[HeltecV3] LED=%d BOOT=%d USER=%d\n", LED_PIN, BUTTON_PIN, USER_BUTTON_PIN);
+}
+#endif
 
 // Double click: cycle screen rotation (0->1->2->3->0)
 void onButtonDoubleClick() {
@@ -139,27 +152,29 @@ void onButtonLongPressStart() {
 }
 #endif
 
-#if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
+#if defined(BUTTON_PIN) && BUTTON_PIN >= 0 && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
 /**
- * Dedicated button handling task (with display)
+ * Dedicated button handling task (wit display)
  * Runs at higher priority than mining to ensure responsive UI
  */
 void button_task(void *param) {
-    Serial.println("[BUTTON] Task started on core 0");
+    log_wait_startup_barrier();
+    log_line("[BUTTON] Task started on core 0");
     for (;;) {
         button.tick();
         vTaskDelay(pdMS_TO_TICKS(10));  // 10ms polling = responsive buttons
     }
 }
 
-#elif defined(BUTTON_PIN)
+#elif defined(BUTTON_PIN) && BUTTON_PIN >= 0
 /**
  * Headless button handling task
  * Simple long-press detection for factory reset (no OneButton/display dependencies)
  * Hold button for 5 seconds to trigger factory reset
  */
 void button_task(void *param) {
-    Serial.println("[BUTTON] Headless button task started");
+    log_wait_startup_barrier();
+    log_line("[BUTTON] Headless button task started");
     pinMode(BUTTON_PIN, INPUT_PULLUP);
 
     unsigned long pressStart = 0;
@@ -173,32 +188,32 @@ void button_task(void *param) {
             // Button just pressed
             pressStart = millis();
             wasPressed = true;
-            Serial.println("[BUTTON] Press detected - hold 5s for factory reset");
+            log_line("[BUTTON] Press detected - hold 5s for factory reset");
         } else if (pressed && wasPressed) {
             // Button held - check duration
             unsigned long held = millis() - pressStart;
             if (held >= RESET_HOLD_MS) {
-                Serial.println("[RESET] *** FACTORY RESET TRIGGERED ***");
+                log_line("[RESET] *** FACTORY RESET TRIGGERED ***");
 
                 // Clear NVS
                 Preferences prefs;
                 if (prefs.begin("sparkminer", false)) {
                     prefs.clear();
                     prefs.end();
-                    Serial.println("[RESET] NVS cleared");
+                    log_line("[RESET] NVS cleared");
                 }
 
                 // Clear WiFi settings
                 WiFi.disconnect(true, true);
-                Serial.println("[RESET] WiFi settings cleared");
+                log_line("[RESET] WiFi settings cleared");
 
                 delay(500);
-                Serial.println("[RESET] Restarting...");
+                log_line("[RESET] Restarting...");
                 ESP.restart();
             }
         } else if (!pressed && wasPressed) {
             // Button released before 5 seconds
-            Serial.println("[BUTTON] Released - normal operation continues");
+            log_line("[BUTTON] Released - normal operation continues");
             wasPressed = false;
         }
 
@@ -211,6 +226,8 @@ void button_task(void *param) {
 void setupPowerManagement();
 void setupTasks();
 void printBanner();
+void logBuildInfo();
+void logBackendSummary();
 void checkFactoryReset();
 uint32_t tryOverclock();
 
@@ -277,7 +294,7 @@ uint32_t tryOverclock() {
  * Hold BOOT button for 5+ seconds to wipe NVS and restart
  */
 void checkFactoryReset() {
-    #ifdef BUTTON_PIN
+    #if defined(BUTTON_PIN) && BUTTON_PIN >= 0
     pinMode(BUTTON_PIN, INPUT_PULLUP);
 
     // Check if button is pressed at boot
@@ -333,7 +350,16 @@ void checkFactoryReset() {
  * Arduino setup - runs once at boot
  */
 void setup() {
+    // BOOT DIAGNOSTICS - before Serial
+    #ifdef BOOT_DEBUG
+    // Toggle GPIO2 (generic LED) to signal we entered setup (if available)
+    pinMode(2, OUTPUT);
+    digitalWrite(2, HIGH);
+    #endif
+
     Serial.begin(115200);
+    log_init();
+    log_set_startup_barrier(false);
 
     // Wait for USB CDC to be ready (with timeout for headless operation)
     // On ESP32-S3, Serial only becomes true when USB host enumerates CDC
@@ -343,20 +369,39 @@ void setup() {
         delay(10);
     }
     Serial.flush();
-    
-    // Debug output  
-    Serial.println();
-    Serial.println("[BOOT] Starting...");
+
+    // BOOT DIAGNOSTICS - Serial ready
+    #ifdef BOOT_DEBUG
+    Serial.println("\n[BOOT] Serial initialized");
+    #endif
+
+    // Debug output
+    log_line("");
+    log_line("[BOOT] Starting...");
 
     // Check for factory reset (hold BOOT button for 5 seconds)
+    #ifdef BOOT_DEBUG
+    Serial.println("[BOOT] Checking factory reset button...");
+    #endif
     checkFactoryReset();
+    #ifdef BOOT_DEBUG
+    Serial.println("[BOOT] Factory reset check complete");
+    #endif
 
     printBanner();
+    logBuildInfo();
+    logBackendSummary();
 
     // Configure watchdog with longer timeout for mining
     // Mining loops will yield periodically via vTaskDelay(1)
-    Serial.println("[INIT] Configuring watchdog timer (30s timeout)...");
+    log_line("[INIT] Configuring watchdog timer (30s timeout)...");
+    #ifdef BOOT_DEBUG
+    Serial.println("[BOOT] About to init WDT");
+    #endif
     esp_task_wdt_init(30, true);  // 30 second timeout, panic on trigger
+    #ifdef BOOT_DEBUG
+    Serial.println("[BOOT] WDT initialized");
+    #endif
 
     // Disable power management (no CPU throttling/sleep)
     setupPowerManagement();
@@ -364,16 +409,39 @@ void setup() {
     // NOTE: ESP32 overclocking via PLL manipulation causes boot loops
     // This ESP32-D0WD-V3 chip cannot exceed 240MHz
     // NMMiner's 1000 KH/s must come from SHA optimization, not overclocking
-    Serial.printf("[INIT] Running at %u MHz\n", getCpuFrequencyMhz());
+    log_linef("[INIT] Running at %u MHz", getCpuFrequencyMhz());
 
     // Initialize NVS configuration
+    #ifdef BOOT_DEBUG
+    Serial.println("[BOOT] About to init NVS");
+    #endif
     nvs_config_init();
+    #ifdef BOOT_DEBUG
+    Serial.println("[BOOT] NVS initialized");
+    #endif
 
     // Initialize mining subsystem
+    #ifdef BOOT_DEBUG
+    Serial.println("[BOOT] About to init mining");
+    #endif
     miner_init();
+    #ifdef BOOT_DEBUG
+    Serial.println("[BOOT] Mining subsystem initialized");
+    #endif
+
+    // Run baseline benchmark (cycle-level performance measurement)
+    #ifdef ENABLE_BASELINE_BENCHMARK
+    baseline_benchmark_run();
+    #endif
 
     // Initialize stratum subsystem
+    #ifdef BOOT_DEBUG
+    Serial.println("[BOOT] About to init stratum");
+    #endif
     stratum_init();
+    #ifdef BOOT_DEBUG
+    Serial.println("[BOOT] Stratum subsystem initialized");
+    #endif
 
     // Load pool configuration from NVS
     miner_config_t *config = nvs_config_get();
@@ -383,12 +451,18 @@ void setup() {
 
     // Initialize display early (needed for WiFi setup screen)
     #if (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
+        #ifdef BOOT_DEBUG
+        Serial.println("[BOOT] About to init display");
+        #endif
         display_init(config->rotation, config->brightness);
         display_set_inverted(config->invertColors);
+        #ifdef BOOT_DEBUG
+        Serial.println("[BOOT] Display initialized");
+        #endif
     #endif
 
     // Setup button handlers (OneButton)
-    #if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
+    #if defined(BUTTON_PIN) && BUTTON_PIN >= 0 && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
         button.setClickMs(400);          // Time window for single click (ms)
         button.setPressMs(1500);         // Time for long press to start (1.5s)
         button.setDebounceMs(50);        // Debounce time (ms)
@@ -396,55 +470,117 @@ void setup() {
         button.attachDoubleClick(onButtonDoubleClick);
         button.attachMultiClick(onButtonMultiClick);          // Triple-click for inversion
         button.attachLongPressStart(onButtonLongPressStart);  // Factory reset handler
-        Serial.println("[INIT] Button handlers registered (click/double/triple/long-press)");
+        log_line("[INIT] Button handlers registered (click/double/triple/long-press)");
     #endif
 
     // Initialize WiFiManager and connect
+    #ifdef BOOT_DEBUG
+    Serial.println("[BOOT] About to init WiFi");
+    #endif
     wifi_manager_init();
-    Serial.println("[INIT] Starting WiFi...");
+    log_line("[INIT] Starting WiFi...");
     wifi_manager_start();
+    #ifdef BOOT_DEBUG
+    Serial.println("[BOOT] WiFi started");
+    #endif
 
     // Register WiFi event handlers for diagnostics
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-        Serial.printf("[WIFI] Disconnected, reason: %d\n", info.wifi_sta_disconnected.reason);
+        log_linef("[WIFI] Disconnected, reason: %d", info.wifi_sta_disconnected.reason);
     }, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
 
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-        Serial.printf("[WIFI] Connected, channel: %d\n", WiFi.channel());
+        log_linef("[WIFI] Connected, channel: %d", WiFi.channel());
     }, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
 
     // Initialize monitor (live stats - display already initialized)
     monitor_init();
 
-    Serial.println("[INIT] Setup complete");
+    log_line("[INIT] Setup complete");
 
     // Check if configuration is valid
     if (!nvs_config_is_valid()) {
-        Serial.println("[WARN] No wallet configured! Please set up via captive portal.");
+        log_line("[WARN] No wallet configured! Please set up via captive portal.");
     }
 
-    // Start FreeRTOS tasks
+    // Print configuration summary
+    const miner_backend_info_t *backend = miner_get_backend_info();
+    log_line("");
+    log_line("=== SparkMiner v" AUTO_VERSION " ===");
+    log_linef("Mining backend: %s", backend->miningBackend);
+    log_linef("HW SHA: %s", backend->hwShaAvailable ? "available/self-tested only" : "unavailable");
+    log_linef("HW SHA hot loop: %s", backend->hwShaHotLoop ? "enabled" : "disabled");
+    log_linef("DMA hot path: %s", backend->dmaHotPath ? "active" : "inactive");
+    log_line("Board: " BOARD_NAME);
+    #if (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
+        log_line("Display: Enabled");
+    #else
+        log_line("Display: Disabled");
+    #endif
+    log_line("");
+
+    // Start FreeRTOS tasks after final startup summary to avoid interleaving.
+    log_set_startup_barrier(true);
     setupTasks();
 
-    // Print configuration summary
-    Serial.println();
-    Serial.println("=== SparkMiner v" AUTO_VERSION " ===");
-    Serial.println("SHA-256 Implementation: "
-        #if defined(USE_HARDWARE_SHA)
-            "Hardware (ESP32-S3/C3)"
+    systemReady = true;
+}
+
+void logBuildInfo() {
+    log_line("[BUILD] ===== Build Metadata =====");
+    log_linef("[BUILD] Version: %s", AUTO_VERSION);
+    log_linef("[BUILD] Git: %s (%s)", BUILD_GIT_DESCRIBE, BUILD_GIT_HASH);
+    log_linef("[BUILD] Git tree: %s", BUILD_GIT_DIRTY ? "DIRTY" : "CLEAN");
+    log_linef("[BUILD] Built (UTC): %s", BUILD_UTC_TIMESTAMP);
+
+    log_linef("[BUILD] PIO env: %s", BUILD_PIO_ENV);
+    log_linef("[BUILD] PIO board: %s", BUILD_PIO_BOARD);
+    log_linef("[BUILD] MCU: %s @ %s", BUILD_PIO_MCU, BUILD_PIO_F_CPU);
+    log_linef("[BUILD] Board name: %s", BOARD_NAME);
+
+    log_linef("[BUILD] Runtime CPU: %u MHz | Cores: %d", getCpuFrequencyMhz(), SOC_CPU_CORES_NUM);
+
+    const miner_backend_info_t *backend = miner_get_backend_info();
+
+    log_linef("[BUILD] Features: HW_SHA=%s, HW_SHA_HOTLOOP=%s, SOFTWARE_MIDSTATE=%s, DMA_HOTPATH=%s",
+        backend->hwShaAvailable ? "available" : "unavailable",
+        backend->hwShaHotLoop ? "on" : "off",
+        backend->softwareMidstate ? "on" : "off",
+        backend->dmaHotPath ? "on" : "off"
+    );
+
+    log_linef("[BUILD] UI: Display=%s, OLED=%s, EINK=%s",
+        #if USE_DISPLAY
+            "on"
         #else
-            "Software (Optimized)"
+            "off"
+        #endif
+        ,
+        #if USE_OLED_DISPLAY
+            "on"
+        #else
+            "off"
+        #endif
+        ,
+        #if USE_EINK_DISPLAY
+            "on"
+        #else
+            "off"
         #endif
     );
-    Serial.println("Board: " BOARD_NAME);
-    #if (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
-        Serial.println("Display: Enabled");
-    #else
-        Serial.println("Display: Disabled");
-    #endif
-    Serial.println();
 
-    systemReady = true;
+    log_line("[BUILD] ==========================");
+}
+
+void logBackendSummary() {
+    const miner_backend_info_t *backend = miner_get_backend_info();
+    log_linef("[BACKEND] Chip: %s", backend->chip);
+    log_linef("[BACKEND] Mining backend: %s", backend->miningBackend);
+    log_linef("[BACKEND] HW SHA available: %s", backend->hwShaAvailable ? "yes" : "no");
+    log_linef("[BACKEND] HW SHA hot loop: %s", backend->hwShaHotLoop ? "yes" : "no");
+    log_linef("[BACKEND] Midstate restore: %s", backend->midstateRestoreSupported ? "supported" : "unsupported");
+    log_linef("[BACKEND] DMA path: %s", backend->dmaHotPath ? "active" : "inactive");
+    log_linef("[BACKEND] Nonce split: %s", backend->nonceSplitCore0LowCore1High ? "core0 low / core1 high" : "n/a");
 }
 
 /**
@@ -467,12 +603,12 @@ void setupPowerManagement() {
         esp_err_t err = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "miner", &pmLock);
         if (err == ESP_OK) {
             esp_pm_lock_acquire(pmLock);
-            Serial.println("[INIT] Power management disabled (no sleep)");
+            log_line("[INIT] Power management disabled (no sleep)");
         } else {
-            Serial.println("[WARN] Could not disable power management");
+            log_line("[WARN] Could not disable power management");
         }
     #else
-        Serial.println("[INIT] Power management not enabled in config");
+        log_line("[INIT] Power management not enabled in config");
     #endif
 }
 
@@ -481,7 +617,7 @@ void setupPowerManagement() {
  * Miner tasks are only created if wallet is configured
  */
 void setupTasks() {
-    Serial.println("[INIT] Creating FreeRTOS tasks...");
+    log_line("[INIT] Creating FreeRTOS tasks...");
 
     bool hasValidConfig = nvs_config_is_valid();
 
@@ -511,7 +647,7 @@ void setupTasks() {
 
     // Button task (responsive UI during mining)
     // Needs 4KB+ stack for NVS writes (rotation save) and display updates
-    #if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
+    #if defined(BUTTON_PIN) && BUTTON_PIN >= 0 && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
         xTaskCreatePinnedToCore(
             button_task,
             "Button",
@@ -521,7 +657,7 @@ void setupTasks() {
             &buttonTask,
             0               // Core 0 with other UI tasks
         );
-    #elif defined(BUTTON_PIN)
+    #elif defined(BUTTON_PIN) && BUTTON_PIN >= 0
         // Headless button task for factory reset (Issue #15 fix)
         xTaskCreatePinnedToCore(
             button_task,
@@ -560,7 +696,7 @@ void setupTasks() {
                 MINER_0_CORE
             );
 
-            Serial.println("[INIT] All tasks created (dual-core mining)");
+            log_line("[INIT] All tasks created (dual-core mining)");
         #else
             // Single-core (C3, S2): Run only one miner task, not pinned
             // Must yield frequently to let WiFi/Stratum work
@@ -573,11 +709,11 @@ void setupTasks() {
                 &miner0Task
             );
 
-            Serial.println("[INIT] All tasks created (single-core mining)");
+            log_line("[INIT] All tasks created (single-core mining)");
         #endif
     } else {
-        Serial.println("[INIT] Monitor task created (mining disabled - no wallet)");
-        Serial.println("[INIT] Configure via captive portal or SD card config.json");
+        log_line("[INIT] Monitor task created (mining disabled - no wallet)");
+        log_line("[INIT] Configure via captive portal or SD card config.json");
     }
 }
 

@@ -77,11 +77,11 @@ static bool s_inverted = false;
 
 static String formatHashrateCompact(double hashrate) {
     if (hashrate >= 1e9) {
-        return String(hashrate / 1e9, 1) + "G";
+        return String(hashrate / 1e9, 1) + " G";
     } else if (hashrate >= 1e6) {
-        return String(hashrate / 1e6, 1) + "M";
+        return String(hashrate / 1e6, 1) + " M";
     } else if (hashrate >= 1e3) {
-        return String(hashrate / 1e3, 1) + "K";
+        return String(hashrate / 1e3, 1) + " K";
     } else {
         return String((int)hashrate);
     }
@@ -111,7 +111,16 @@ static String formatDiffCompact(double diff) {
     } else if (diff >= 1e3) {
         return String(diff / 1e3, 1) + "K";
     } else {
-        return String((int)diff);
+        if (diff >= 1.0) {
+            return String(diff, 2);
+        } else if (diff >= 0.1) {
+            return String(diff, 3);
+        } else if (diff >= 0.01) {
+            return String(diff, 4);
+        } else if (diff >= 0.001) {
+            return String(diff, 5);
+        }
+        return String(diff, 6);
     }
 }
 
@@ -147,15 +156,9 @@ static void drawMainScreen(const display_data_t *data) {
     // Separator line
     s_u8g2.drawHLine(0, 10, OLED_WIDTH);
 
-    // Large hashrate display
-    s_u8g2.setFont(u8g2_font_logisoso16_tn);  // Large numeric font
-    String hashrate = formatHashrateCompact(data->hashRate);
+    String hashrate = formatHashrateCompact(data->hashRate) + "H/s";
     int hrWidth = s_u8g2.getStrWidth(hashrate.c_str());
     s_u8g2.drawStr((OLED_WIDTH - hrWidth) / 2, 32, hashrate.c_str());
-
-    // "H/s" label below
-    s_u8g2.setFont(u8g2_font_6x10_tf);
-    s_u8g2.drawStr((OLED_WIDTH - 18) / 2, 42, "H/s");
 
     // Bottom stats row
     #if (OLED_HEIGHT == 64)
@@ -216,10 +219,25 @@ static void drawStatsScreen(const display_data_t *data) {
 void oled_display_init(uint8_t rotation, uint8_t brightness) {
     Serial.printf("[OLED] Initializing %dx%d display\n", OLED_WIDTH, OLED_HEIGHT);
 
-    // Initialize I2C with custom pins
+
+#ifdef HELTEC_V3
+    Serial.println("HELTEC: Enabling Vext (GPIO36 LOW)");
+    pinMode(VEXT_PIN, OUTPUT);
+    digitalWrite(VEXT_PIN, LOW); // Vext ON (active low)
+    delay(50);
+
+    Serial.println("HELTEC: Resetting OLED (GPIO21)");
+    pinMode(OLED_RST_PIN, OUTPUT);
+    digitalWrite(OLED_RST_PIN, LOW);
+    delay(20);
+    digitalWrite(OLED_RST_PIN, HIGH);
+    delay(20);
+
+    Serial.println("HELTEC: Starting I2C (17,18)");
+#endif
     Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
 
-    // Initialize U8g2
+    Serial.println("HELTEC: Initializing SSD1306 @ 0x3C");
     s_u8g2.begin();
 
     // Set rotation
@@ -236,6 +254,10 @@ void oled_display_init(uint8_t rotation, uint8_t brightness) {
 
     // Show boot screen
     oled_display_show_boot();
+
+    Serial.printf("[HeltecV3] LED on GPIO %d\n", LED_PIN);
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW); // Off by default
 
     Serial.println("[OLED] Display initialized");
 }

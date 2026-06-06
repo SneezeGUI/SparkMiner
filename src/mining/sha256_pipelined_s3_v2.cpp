@@ -236,9 +236,9 @@ bool IRAM_ATTR sha256_pipelined_mine_s3_v2(
         "l8ui     a3, %[flag], 0      \n"
         "beqz.n   a3, exit_v2         \n"
 
-        // ===== PHASE 11: Early reject - check SHA_H[0] lower 16 bits =====
+        // ===== PHASE 11: Early reject - check SHA_H[0] upper 16 bits =====
         "l32i     a3, a7, 0x40        \n"    // Load SHA_H[0]
-        "extui    a3, a3, 0, 16       \n"    // Extract lower 16 bits
+        "extui    a3, a3, 16, 16      \n"    // Extract upper 16 bits
         "beqz.n   a3, exit_v2         \n"    // Exit if potential share!
 
         // Continue mining

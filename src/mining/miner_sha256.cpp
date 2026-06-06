@@ -14,6 +14,8 @@
 #define BYTESWAP32(z) ((uint32_t)((z&0xFF)<<24|((z>>8)&0xFF)<<16|((z>>16)&0xFF)<<8|((z>>24)&0xFF)))
 
 #define RROT(v, s) ((v)>>(s) | (v)<<(32-(s)))
+#define SSIG0(v) (RROT((v),7) ^ RROT((v),18) ^ ((v) >> 3))
+#define SSIG1(v) (RROT((v),17) ^ RROT((v),19) ^ ((v) >> 10))
 #define R1_a(i) (w[i] = w[i-16] + (RROT(w[i-15],7) ^ (RROT(w[i-15],18) ^ (w[i-15] >> 3))) + ((RROT(w[i-2],17) ^ RROT(w[i-2],19) ^ (w[i-2] >> 10))))
 
 #define R1(i) (w[i] = w[i-16] + (RROT(w[i-15],7) ^ (RROT(w[i-15],18) ^ (w[i-15] >> 3))) + w[i-7] + ((RROT(w[i-2],17) ^ RROT(w[i-2],19) ^ (w[i-2] >> 10))))
@@ -60,22 +62,62 @@ static uint32_t k[] = {
    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 };
 
+static const WORD kTailPadWord = 0x80000000u;
+static const WORD kTailLenWord = 0x00000280u;
+static const WORD kSigma0PadWord = 0x11002000u; // sigma0(0x80000000)
+static const WORD kSigma0LenWord = 0x00a00055u; // sigma0(0x00000280)
+static const WORD kSigma1LenWord = 0x01100000u; // sigma1(0x00000280)
 
-static void sha256_transform(sha256_hash_t *ctx, uint8_t *msg) {
+#ifndef MINER_EXPERIMENTAL_COMPRESSOR
+#define MINER_EXPERIMENTAL_COMPRESSOR 0
+#endif
+
+#if MINER_EXPERIMENTAL_COMPRESSOR
+#define BSIG0(v) (RROT((v), 2) ^ RROT((v), 13) ^ RROT((v), 22))
+#define BSIG1(v) (RROT((v), 6) ^ RROT((v), 11) ^ RROT((v), 25))
+#define CHX(e,f,g) (((e) & (f)) ^ (~(e) & (g)))
+#define MAJX(a,b,c) (((a) & (b)) ^ ((a) & (c)) ^ ((b) & (c)))
+
+static IRAM_ATTR void sha256_compress_64_experimental(
+    WORD *a,
+    WORD *b,
+    WORD *c,
+    WORD *d,
+    WORD *e,
+    WORD *f,
+    WORD *g,
+    WORD *h,
+    const WORD *w
+) {
+    WORD ra = *a, rb = *b, rc = *c, rd = *d;
+    WORD re = *e, rf = *f, rg = *g, rh = *h;
+
+    for (int i = 0; i < 64; i++) {
+        const WORD t1 = rh + BSIG1(re) + CHX(re, rf, rg) + k[i] + w[i];
+        const WORD t2 = BSIG0(ra) + MAJX(ra, rb, rc);
+        rh = rg;
+        rg = rf;
+        rf = re;
+        re = rd + t1;
+        rd = rc;
+        rc = rb;
+        rb = ra;
+        ra = t1 + t2;
+    }
+
+    *a = ra; *b = rb; *c = rc; *d = rd;
+    *e = re; *f = rf; *g = rg; *h = rh;
+}
+#endif
+
+
+static void IRAM_ATTR sha256_transform(sha256_hash_t *ctx, uint8_t *msg) {
     WORD w[64];
     WORD temp1, temp2;
     WORD i, j;
 
-    WORD WA[8] = {
-        ctx->hash[0],
-        ctx->hash[1],
-        ctx->hash[2],
-        ctx->hash[3],
-        ctx->hash[4],
-        ctx->hash[5],
-        ctx->hash[6],
-        ctx->hash[7]
-    };
+    WORD a = ctx->hash[0], b = ctx->hash[1], c = ctx->hash[2], d = ctx->hash[3];
+    WORD e = ctx->hash[4], f = ctx->hash[5], g = ctx->hash[6], h = ctx->hash[7];
 
     // Copy chunk into first 16 words w[0..15] of the message schedule array
     for (i = 0, j = 0; i < 16; ++i, j += 4) {
@@ -88,90 +130,26 @@ static void sha256_transform(sha256_hash_t *ctx, uint8_t *msg) {
     R1(46); R1(47); R1(48); R1(49); R1(50); R1(51); R1(52); R1(53); R1(54); R1(55);
     R1(56); R1(57); R1(58); R1(59); R1(60); R1(61); R1(62); R1(63);
 
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 0);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 1);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 2);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 3);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 4);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 5);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 6);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 7);
+    C1(0);C1(1);C1(2);C1(3);C1(4);C1(5);C1(6);C1(7);C1(8);C1(9);
+    C1(10);C1(11);C1(12);C1(13);C1(14);C1(15);C1(16);C1(17);C1(18);C1(19);
+    C1(20);C1(21);C1(22);C1(23);C1(24);C1(25);C1(26);C1(27);C1(28);C1(29);
+    C1(30);C1(31);C1(32);C1(33);C1(34);C1(35);C1(36);C1(37);C1(38);C1(39);
+    C1(40);C1(41);C1(42);C1(43);C1(44);C1(45);C1(46);C1(47);C1(48);C1(49);
+    C1(50);C1(51);C1(52);C1(53);C1(54);C1(55);C1(56);C1(57);C1(58);C1(59);
+    C1(60);C1(61);C1(62);C1(63);
 
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 8);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 9);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 10);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 11);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 12);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 13);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 14);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 15);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 16);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 17);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 18);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 19);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 20);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 21);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 22);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 23);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 24);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 25);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 26);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 27);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 28);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 29);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 30);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 31);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 32);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 33);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 34);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 35);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 36);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 37);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 38);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 39);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 40);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 41);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 42);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 43);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 44);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 45);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 46);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 47);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 48);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 49);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 50);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 51);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 52);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 53);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 54);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 55);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 56);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 57);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 58);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 59);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 60);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 61);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 62);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 63);
-
-    ctx->hash[0] += WA[0];
-    ctx->hash[1] += WA[1];
-    ctx->hash[2] += WA[2];
-    ctx->hash[3] += WA[3];
-    ctx->hash[4] += WA[4];
-    ctx->hash[5] += WA[5];
-    ctx->hash[6] += WA[6];
-    ctx->hash[7] += WA[7];
+    ctx->hash[0] += a;
+    ctx->hash[1] += b;
+    ctx->hash[2] += c;
+    ctx->hash[3] += d;
+    ctx->hash[4] += e;
+    ctx->hash[5] += f;
+    ctx->hash[6] += g;
+    ctx->hash[7] += h;
 }
 
 
-void miner_sha256(sha256_hash_t *ctx, uint8_t *msg, size_t len) {
+void IRAM_ATTR miner_sha256(sha256_hash_t *ctx, uint8_t *msg, size_t len) {
     ctx->hash[0] = h0;
     ctx->hash[1] = h1;
     ctx->hash[2] = h2;
@@ -223,7 +201,7 @@ void miner_sha256(sha256_hash_t *ctx, uint8_t *msg, size_t len) {
 }
 
 
-void miner_sha256_midstate(sha256_hash_t *ctx, block_header_t *hb) {
+void IRAM_ATTR miner_sha256_midstate(sha256_hash_t *ctx, block_header_t *hb) {
     WORD w[64];
     WORD temp1, temp2;
     WORD a, b, c, d, e, f, g, h;
@@ -268,22 +246,209 @@ void miner_sha256_midstate(sha256_hash_t *ctx, block_header_t *hb) {
     ctx->hash[7] += h;
 }
 
-bool miner_sha256_header(sha256_hash_t *midpoint, sha256_hash_t *ctx, block_header_t *hb) {
-    sha256_hash_t tmp;
-    WORD temp1, temp2;
-    uint8_t *data = (uint8_t *)hb;
-    int i, j;
+bool IRAM_ATTR miner_sha256_header(sha256_hash_t *midpoint, sha256_hash_t *ctx, block_header_t *hb) {
+    miner_sha256_complete_from_midstate(midpoint, hb, NULL, ctx);
 
-    WORD WA[8] = {
-        midpoint->hash[0],
-        midpoint->hash[1],
-        midpoint->hash[2],
-        midpoint->hash[3],
-        midpoint->hash[4],
-        midpoint->hash[5],
-        midpoint->hash[6],
-        midpoint->hash[7]
-    };
+    // Keep existing fast prefilter semantics for callers that use the bool return.
+    // Early reject optimization: Check if upper 16 bits of H0 are zero.
+    // This filters out ~65,536× more hashes before full target comparison.
+    // Since pool difficulty is typically around 4 billion, this rejects ~99.99% of hashes
+    // with just a 2-byte comparison instead of a full 32-byte target check.
+    return (ctx->bytes[31] == 0 && ctx->bytes[30] == 0);
+}
+
+void IRAM_ATTR miner_sha256_prepare_tail_schedule(
+    sha256_tail_schedule_cache_t *cache,
+    const block_header_t *hb
+) {
+    const uint8_t *data = (const uint8_t *)hb;
+
+    cache->w0 = GET_DATA(data, 64);
+    cache->w1 = GET_DATA(data, 68);
+    cache->w2 = GET_DATA(data, 72);
+
+    cache->w16 = cache->w0 + SSIG0(cache->w1);
+    cache->w17 = cache->w1 + SSIG0(cache->w2) + kSigma1LenWord;
+    cache->s1_w16 = SSIG1(cache->w16);
+    cache->s1_w17 = SSIG1(cache->w17);
+}
+
+/**
+ * Complete Bitcoin double SHA-256 from pre-computed first-64-byte midstate.
+ *
+ * This is the core mining hash function called once per nonce.
+ * Time: ~4-5 microseconds
+ * Work: Two full SHA-256 compression blocks (one for tail, one for doubling)
+ *
+ * Algorithm:
+ * 1. Load tail block (last 16 bytes of header + nonce + padding)
+ * 2. Expand message schedule (w[16..63] from w[0..15])
+ * 3. 64 macro-unrolled compression rounds using midstate as initial state
+ * 4. Finalize first hash (H0-H7 + midstate)
+ * 5. Byte-swap result to big-endian for second hash input
+ * 6. Feed through miner_sha256() for second compression
+ * 7. Return final 32-byte hash in little-endian (for target comparison)
+ *
+ * Why software (not hardware):
+ * - Hardware SHA requires mutex (dual-core contention)
+ * - Software is single-core per nonce (no synchronization)
+ * - Macro-unrolled rounds avoid loop overhead
+ * - No register I/O latency
+ * - Proven stable and fast in production (~43-45 kH/s)
+ *
+ * Alternative hardware path exists but was disabled because:
+ * - Lock overhead > hardware acceleration benefit
+ * - Full 80-byte hardware SHA recomputes cached midstate
+ * - Midstate restore/continue adds register write overhead
+ * - Detailed analysis: See SHA256_BACKEND_INVESTIGATION.md
+ *
+ * @param midpoint Pre-computed midstate from miner_sha256_midstate()
+ * @param hb Block header with current nonce
+ * @param firstOut Optional: First SHA-256 result (only used in testing)
+ * @param secondOut Final double-SHA-256 result
+ */
+/*
+ * Inline-only helper: second SHA-256 of a 32-byte first-hash result.
+ *
+ * Existing second-SHA optimization (landed before first-tail schedule cache work).
+ * Replaces miner_sha256(secondOut, tmp.bytes, 32) in the hot path.
+ *
+ * Optimizations vs the generic call:
+ *  1. No byte-array roundtrip – takes raw first-hash words directly as w[0..7]
+ *  2. Hardcoded padding: w[8..15] = {0x80000000,0,0,0,0,0,0,0x00000100}
+ *  3. Schedule simplified where padding words are 0:
+ *       sigma0(0)=0, sigma1(0)=0 eliminate additions for w[16..29]
+ *       sigma1(0x100), sigma0(0x80000000), sigma0(0x100) folded to constants
+ *  4. IV baked in as register initializers (no ctx struct load/store)
+ *  5. always_inline lets the compiler optimize registers across both SHAs
+ *
+ * Input invariant:  fh[i] = a_i + midpoint->hash[i]  (pre-BYTESWAP32 value)
+ * This equals GET_DATA(byteswapped_bytes, i*4), so it is the correct w[i]
+ * input for standard big-endian SHA-256 message loading.
+ *
+ * Pre-computed padding constants (verified):
+ *   sigma1(0)          = 0
+ *   sigma0(0)          = 0
+ *   sigma1(0x00000100) = RROT(0x100,17)^RROT(0x100,19)^(0x100>>10) = 0x00A00000
+ *   sigma0(0x80000000) = RROT(0x80000000,7)^RROT(0x80000000,18)^(0x80000000>>3) = 0x11002000
+ *   sigma0(0x00000100) = RROT(0x100,7)^RROT(0x100,18)^(0x100>>3) = 0x00400022
+ */
+static IRAM_ATTR void sha256_second_from_first_hash(
+    const WORD *fh,       // fh[0..7] = first hash words (a+mid, not byteswapped)
+    sha256_hash_t *secondOut
+) {
+    WORD w[64];
+    WORD temp1, temp2;
+
+    // Load first hash as w[0..7] (no byte parsing needed)
+    w[0]=fh[0]; w[1]=fh[1]; w[2]=fh[2]; w[3]=fh[3];
+    w[4]=fh[4]; w[5]=fh[5]; w[6]=fh[6]; w[7]=fh[7];
+    // Hardcoded 32-byte padding: w[8]=0x80000000, w[9..14]=0, w[15]=0x100
+    w[8]=0x80000000u;
+    w[9]=0; w[10]=0; w[11]=0; w[12]=0; w[13]=0; w[14]=0;
+    w[15]=0x00000100u;
+
+    // w[16] = w[0] + sigma0(w[1]) + w[9] + sigma1(w[14])
+    //       = w[0] + sigma0(w[1])          [w[9]=0, sigma1(0)=0, w[14]=0]
+    w[16] = w[0] + (RROT(w[1],7)^RROT(w[1],18)^(w[1]>>3));
+
+    // w[17] = w[1] + sigma0(w[2]) + w[10] + sigma1(w[15])
+    //       = w[1] + sigma0(w[2]) + 0xA00000  [w[10]=0, sigma1(0x100)=0xA00000]
+    w[17] = w[1] + (RROT(w[2],7)^RROT(w[2],18)^(w[2]>>3)) + 0x00A00000u;
+
+    // w[18] = w[2] + sigma0(w[3]) + w[11] + sigma1(w[16])  [w[11]=0]
+    w[18] = w[2] + (RROT(w[3],7)^RROT(w[3],18)^(w[3]>>3)) + (RROT(w[16],17)^RROT(w[16],19)^(w[16]>>10));
+
+    // w[19] = w[3] + sigma0(w[4]) + w[12] + sigma1(w[17])  [w[12]=0]
+    w[19] = w[3] + (RROT(w[4],7)^RROT(w[4],18)^(w[4]>>3)) + (RROT(w[17],17)^RROT(w[17],19)^(w[17]>>10));
+
+    // w[20] = w[4] + sigma0(w[5]) + w[13] + sigma1(w[18])
+    //       = w[4] + sigma0(w[5]) + sigma1(w[18])          [w[13]=0]
+    w[20] = w[4] + (RROT(w[5],7)^RROT(w[5],18)^(w[5]>>3)) + (RROT(w[18],17)^RROT(w[18],19)^(w[18]>>10));
+
+    // w[21] = w[5] + sigma0(w[6]) + w[14] + sigma1(w[19])
+    //       = w[5] + sigma0(w[6]) + sigma1(w[19])          [w[14]=0]
+    w[21] = w[5] + (RROT(w[6],7)^RROT(w[6],18)^(w[6]>>3)) + (RROT(w[19],17)^RROT(w[19],19)^(w[19]>>10));
+
+    // w[22] = w[6] + sigma0(w[7]) + w[15] + sigma1(w[20])
+    //       = w[6] + sigma0(w[7]) + 0x100 + sigma1(w[20])  [w[15]=0x100]
+    w[22] = w[6] + (RROT(w[7],7)^RROT(w[7],18)^(w[7]>>3)) + 0x00000100u + (RROT(w[20],17)^RROT(w[20],19)^(w[20]>>10));
+
+    // w[23] = w[7] + sigma0(w[8]) + w[16] + sigma1(w[21])
+    //       = w[7] + 0x11002000 + w[16] + sigma1(w[21])  [sigma0(0x80000000)=0x11002000]
+    w[23] = w[7] + 0x11002000u + w[16] + (RROT(w[21],17)^RROT(w[21],19)^(w[21]>>10));
+
+    // w[24] = w[8] + sigma0(w[9]) + w[17] + sigma1(w[22])
+    //       = 0x80000000 + w[17] + sigma1(w[22])  [sigma0(0)=0, w[9]=0]
+    w[24] = 0x80000000u + w[17] + (RROT(w[22],17)^RROT(w[22],19)^(w[22]>>10));
+
+    // w[25] = w[9] + sigma0(w[10]) + w[18] + sigma1(w[23])
+    //       = w[18] + sigma1(w[23])         [w[9]=0, sigma0(0)=0, w[10]=0]
+    w[25] = w[18] + (RROT(w[23],17)^RROT(w[23],19)^(w[23]>>10));
+
+    // w[26] = w[10] + sigma0(w[11]) + w[19] + sigma1(w[24])
+    //       = w[19] + sigma1(w[24])         [w[10]=0, sigma0(0)=0, w[11]=0]
+    w[26] = w[19] + (RROT(w[24],17)^RROT(w[24],19)^(w[24]>>10));
+
+    // w[27] = w[11] + sigma0(w[12]) + w[20] + sigma1(w[25])
+    //       = w[20] + sigma1(w[25])         [w[11]=0, sigma0(0)=0, w[12]=0]
+    w[27] = w[20] + (RROT(w[25],17)^RROT(w[25],19)^(w[25]>>10));
+
+    // w[28] = w[12] + sigma0(w[13]) + w[21] + sigma1(w[26])
+    //       = w[21] + sigma1(w[26])         [w[12]=0, sigma0(0)=0, w[13]=0]
+    w[28] = w[21] + (RROT(w[26],17)^RROT(w[26],19)^(w[26]>>10));
+
+    // w[29] = w[13] + sigma0(w[14]) + w[22] + sigma1(w[27])
+    //       = w[22] + sigma1(w[27])         [w[13]=0, sigma0(0)=0, w[14]=0]
+    w[29] = w[22] + (RROT(w[27],17)^RROT(w[27],19)^(w[27]>>10));
+
+    // w[30] = w[14] + sigma0(w[15]) + w[23] + sigma1(w[28])
+    //       = 0x400022 + w[23] + sigma1(w[28])  [w[14]=0, sigma0(0x100)=0x400022]
+    w[30] = 0x00400022u + w[23] + (RROT(w[28],17)^RROT(w[28],19)^(w[28]>>10));
+
+    // w[31] = w[15] + sigma0(w[16]) + w[24] + sigma1(w[29])  [w[15]=0x100 constant]
+    w[31] = 0x00000100u + (RROT(w[16],7)^RROT(w[16],18)^(w[16]>>3)) + w[24] + (RROT(w[29],17)^RROT(w[29],19)^(w[29]>>10));
+
+    // w[32..63]: regular expansion, all inputs data-dependent from here
+    R1(32); R1(33); R1(34); R1(35); R1(36); R1(37); R1(38); R1(39); R1(40); R1(41);
+    R1(42); R1(43); R1(44); R1(45); R1(46); R1(47); R1(48); R1(49); R1(50); R1(51);
+    R1(52); R1(53); R1(54); R1(55); R1(56); R1(57); R1(58); R1(59); R1(60); R1(61);
+    R1(62); R1(63);
+
+    // Compression: start from SHA-256 IV (baked-in constants, no struct load)
+    WORD a=h0, b=h1, c=h2, d=h3, e=h4, f=h5, g=h6, h=h7;
+    C1(0);C1(1);C1(2);C1(3);C1(4);C1(5);C1(6);C1(7);C1(8);C1(9);
+    C1(10);C1(11);C1(12);C1(13);C1(14);C1(15);C1(16);C1(17);C1(18);C1(19);
+    C1(20);C1(21);C1(22);C1(23);C1(24);C1(25);C1(26);C1(27);C1(28);C1(29);
+    C1(30);C1(31);C1(32);C1(33);C1(34);C1(35);C1(36);C1(37);C1(38);C1(39);
+    C1(40);C1(41);C1(42);C1(43);C1(44);C1(45);C1(46);C1(47);C1(48);C1(49);
+    C1(50);C1(51);C1(52);C1(53);C1(54);C1(55);C1(56);C1(57);C1(58);C1(59);
+    C1(60);C1(61);C1(62);C1(63);
+
+    // Davies-Meyer addback with byteswap (same as miner_sha256 output format)
+    secondOut->hash[0] = BYTESWAP32(a + h0);
+    secondOut->hash[1] = BYTESWAP32(b + h1);
+    secondOut->hash[2] = BYTESWAP32(c + h2);
+    secondOut->hash[3] = BYTESWAP32(d + h3);
+    secondOut->hash[4] = BYTESWAP32(e + h4);
+    secondOut->hash[5] = BYTESWAP32(f + h5);
+    secondOut->hash[6] = BYTESWAP32(g + h6);
+    secondOut->hash[7] = BYTESWAP32(h + h7);
+}
+
+void IRAM_ATTR miner_sha256_complete_from_midstate(
+    const sha256_hash_t *midpoint,
+    const block_header_t *hb,
+    sha256_hash_t *firstOut,
+    sha256_hash_t *secondOut
+) {
+#if !MINER_EXPERIMENTAL_COMPRESSOR
+    WORD temp1, temp2;
+#endif
+    const uint8_t *data = (const uint8_t *)hb;
+
+    WORD a = midpoint->hash[0], b = midpoint->hash[1], c = midpoint->hash[2], d = midpoint->hash[3];
+    WORD e = midpoint->hash[4], f = midpoint->hash[5], g = midpoint->hash[6], h = midpoint->hash[7];
 
     // Second half of block (last 16 bytes of 80-byte header + padding)
     // w[0..3] = bytes 64-79 (merkle tail, timestamp, nbits, nonce)
@@ -303,209 +468,85 @@ bool miner_sha256_header(sha256_hash_t *midpoint, sha256_hash_t *ctx, block_head
     R1(46); R1(47); R1(48); R1(49); R1(50); R1(51); R1(52); R1(53); R1(54); R1(55);
     R1(56); R1(57); R1(58); R1(59); R1(60); R1(61); R1(62); R1(63);
 
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 0);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 1);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 2);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 3);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 4);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 5);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 6);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 7);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 8);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 9);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 10);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 11);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 12);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 13);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 14);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 15);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 16);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 17);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 18);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 19);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 20);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 21);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 22);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 23);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 24);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 25);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 26);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 27);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 28);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 29);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 30);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 31);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 32);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 33);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 34);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 35);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 36);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 37);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 38);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 39);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 40);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 41);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 42);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 43);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 44);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 45);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 46);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 47);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 48);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 49);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 50);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 51);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 52);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 53);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 54);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 55);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 56);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 57);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 58);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 59);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 60);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 61);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 62);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 63);
+#if MINER_EXPERIMENTAL_COMPRESSOR
+    sha256_compress_64_experimental(&a, &b, &c, &d, &e, &f, &g, &h, w);
+#else
+    C1(0);C1(1);C1(2);C1(3);C1(4);C1(5);C1(6);C1(7);C1(8);C1(9);
+    C1(10);C1(11);C1(12);C1(13);C1(14);C1(15);C1(16);C1(17);C1(18);C1(19);
+    C1(20);C1(21);C1(22);C1(23);C1(24);C1(25);C1(26);C1(27);C1(28);C1(29);
+    C1(30);C1(31);C1(32);C1(33);C1(34);C1(35);C1(36);C1(37);C1(38);C1(39);
+    C1(40);C1(41);C1(42);C1(43);C1(44);C1(45);C1(46);C1(47);C1(48);C1(49);
+    C1(50);C1(51);C1(52);C1(53);C1(54);C1(55);C1(56);C1(57);C1(58);C1(59);
+    C1(60);C1(61);C1(62);C1(63);
+#endif
 
     // First hash complete - byte-swap for second hash input
-    tmp.hash[0] = BYTESWAP32(WA[0] + midpoint->hash[0]);
-    tmp.hash[1] = BYTESWAP32(WA[1] + midpoint->hash[1]);
-    tmp.hash[2] = BYTESWAP32(WA[2] + midpoint->hash[2]);
-    tmp.hash[3] = BYTESWAP32(WA[3] + midpoint->hash[3]);
-    tmp.hash[4] = BYTESWAP32(WA[4] + midpoint->hash[4]);
-    tmp.hash[5] = BYTESWAP32(WA[5] + midpoint->hash[5]);
-    tmp.hash[6] = BYTESWAP32(WA[6] + midpoint->hash[6]);
-    tmp.hash[7] = BYTESWAP32(WA[7] + midpoint->hash[7]);
+    // Store as raw (pre-BYTESWAP) words — sha256_second_from_first_hash uses them
+    // as w[0..7] directly (equivalent to what GET_DATA reads from byteswapped bytes).
+    WORD fh[8] = {
+        a + midpoint->hash[0], b + midpoint->hash[1],
+        c + midpoint->hash[2], d + midpoint->hash[3],
+        e + midpoint->hash[4], f + midpoint->hash[5],
+        g + midpoint->hash[6], h + midpoint->hash[7]
+    };
 
-    // Copy first hash into working area for double hash
-    data = (uint8_t *)tmp.hash;
+    if (firstOut) {
+        firstOut->hash[0] = BYTESWAP32(fh[0]);
+        firstOut->hash[1] = BYTESWAP32(fh[1]);
+        firstOut->hash[2] = BYTESWAP32(fh[2]);
+        firstOut->hash[3] = BYTESWAP32(fh[3]);
+        firstOut->hash[4] = BYTESWAP32(fh[4]);
+        firstOut->hash[5] = BYTESWAP32(fh[5]);
+        firstOut->hash[6] = BYTESWAP32(fh[6]);
+        firstOut->hash[7] = BYTESWAP32(fh[7]);
+    }
 
-    w[0] = GET_DATA(data, 0);
-    w[1] = GET_DATA(data, 4);
-    w[2] = GET_DATA(data, 8);
-    w[3] = GET_DATA(data, 12);
-    w[4] = GET_DATA(data, 16);
-    w[5] = GET_DATA(data, 20);
-    w[6] = GET_DATA(data, 24);
-    w[7] = GET_DATA(data, 28);
+    if (secondOut) {
+        sha256_second_from_first_hash(fh, secondOut);
+    }
+}
 
-    w[8] = 0x80000000;
-    w[9] = w[10] = w[11] = w[12] = w[13] = w[14] = 0;
-    w[15] = 0x00000100;  // 256 bits
+void IRAM_ATTR miner_sha256_complete_from_midstate_prepared(
+    const sha256_hash_t *midpoint,
+    const sha256_tail_schedule_cache_t *cache,
+    uint32_t nonce,
+    sha256_hash_t *firstOut,
+    sha256_hash_t *secondOut
+) {
+    // Correctness-first implementation: reconstruct the exact tail bytes from cache+nonce
+    // and route through the validated legacy completion path.
+    block_header_t hb = {0};
+    uint8_t *data = (uint8_t *)&hb;
 
-    WA[0] = h0;
-    WA[1] = h1;
-    WA[2] = h2;
-    WA[3] = h3;
-    WA[4] = h4;
-    WA[5] = h5;
-    WA[6] = h6;
-    WA[7] = h7;
+    data[64] = (uint8_t)(cache->w0 >> 24);
+    data[65] = (uint8_t)(cache->w0 >> 16);
+    data[66] = (uint8_t)(cache->w0 >> 8);
+    data[67] = (uint8_t)(cache->w0);
 
-    // Abbreviated macros where there is no data
-    R1_a(16); R1_a(17); R1_a(18); R1_a(19); R1_a(20); R1_a(21);
-    R1(22); R1(23);
-    R1_b(24);
-    R1_c(25); R1_c(26); R1_c(27); R1_c(28); R1_c(29);
-    R1_d(30);
-    R1(31); R1(32); R1(33); R1(34); R1(35);
-    R1(36); R1(37); R1(38); R1(39); R1(40); R1(41); R1(42); R1(43); R1(44); R1(45);
-    R1(46); R1(47); R1(48); R1(49); R1(50); R1(51); R1(52); R1(53); R1(54); R1(55);
-    R1(56); R1(57); R1(58); R1(59); R1(60); R1(61); R1(62); R1(63);
+    data[68] = (uint8_t)(cache->w1 >> 24);
+    data[69] = (uint8_t)(cache->w1 >> 16);
+    data[70] = (uint8_t)(cache->w1 >> 8);
+    data[71] = (uint8_t)(cache->w1);
 
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 0);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 1);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 2);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 3);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 4);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 5);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 6);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 7);
+    data[72] = (uint8_t)(cache->w2 >> 24);
+    data[73] = (uint8_t)(cache->w2 >> 16);
+    data[74] = (uint8_t)(cache->w2 >> 8);
+    data[75] = (uint8_t)(cache->w2);
 
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 8);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 9);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 10);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 11);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 12);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 13);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 14);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 15);
+    data[76] = (uint8_t)(nonce);
+    data[77] = (uint8_t)(nonce >> 8);
+    data[78] = (uint8_t)(nonce >> 16);
+    data[79] = (uint8_t)(nonce >> 24);
 
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 16);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 17);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 18);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 19);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 20);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 21);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 22);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 23);
+    miner_sha256_complete_from_midstate(midpoint, &hb, firstOut, secondOut);
+}
 
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 24);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 25);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 26);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 27);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 28);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 29);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 30);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 31);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 32);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 33);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 34);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 35);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 36);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 37);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 38);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 39);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 40);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 41);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 42);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 43);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 44);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 45);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 46);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 47);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 48);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 49);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 50);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 51);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 52);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 53);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 54);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 55);
-
-    CM(0, 1, 2, 3, 4, 5, 6, 7, 56);
-    CM(7, 0, 1, 2, 3, 4, 5, 6, 57);
-    CM(6, 7, 0, 1, 2, 3, 4, 5, 58);
-    CM(5, 6, 7, 0, 1, 2, 3, 4, 59);
-    CM(4, 5, 6, 7, 0, 1, 2, 3, 60);
-    CM(3, 4, 5, 6, 7, 0, 1, 2, 61);
-    CM(2, 3, 4, 5, 6, 7, 0, 1, 62);
-    CM(1, 2, 3, 4, 5, 6, 7, 0, 63);
-
-    // Early 16-bit reject - no need to continue if we don't have a good hash
-    ctx->hash[7] = WA[7] + h7;
-    if (ctx->hash[7] & 0xffff) return false;
-
-    // Complete the output hash with byte-swap
-    ctx->hash[0] = BYTESWAP32(WA[0] + h0);
-    ctx->hash[1] = BYTESWAP32(WA[1] + h1);
-    ctx->hash[2] = BYTESWAP32(WA[2] + h2);
-    ctx->hash[3] = BYTESWAP32(WA[3] + h3);
-    ctx->hash[4] = BYTESWAP32(WA[4] + h4);
-    ctx->hash[5] = BYTESWAP32(WA[5] + h5);
-    ctx->hash[6] = BYTESWAP32(WA[6] + h6);
-    ctx->hash[7] = BYTESWAP32(ctx->hash[7]);
-
-    return true;
+bool IRAM_ATTR miner_sha256_header_prepared(
+    const sha256_hash_t *midpoint,
+    const sha256_tail_schedule_cache_t *cache,
+    uint32_t nonce,
+    sha256_hash_t *ctx
+) {
+    miner_sha256_complete_from_midstate_prepared(midpoint, cache, nonce, NULL, ctx);
+    return (ctx->bytes[31] == 0 && ctx->bytes[30] == 0);
 }

@@ -154,7 +154,37 @@ env = "wemos-lolin32-oled"
 chip = "esp32"
 description = "Wemos Lolin32 with SSD1306 OLED (SDA=GPIO5, SCL=GPIO4, RST=GPIO16, addr=0x3C)"
 needs_boot_mode = false
+
+[boards.heltec-wifi-lora32-v3]
+name = "Heltec WiFi LoRa 32 V3"
+env = "heltec-wifi-lora32-v3"
+chip = "esp32s3"
+description = "Heltec WiFi LoRa 32 V3: ESP32-S3, 128x64 OLED (I2C), LoRa SX1262, no PSRAM (~280 H/s)"
+needs_boot_mode = true
+port_changes_on_reset = true
 group = "OLED Display"
+
+[boards.seeed-xiao-esp32s3]
+name = "Seeed XIAO ESP32-S3"
+env = "seeed-xiao-esp32s3"
+chip = "esp32s3"
+description = "Compact ESP32-S3 headless miner (22x26.5mm, USB-C, 16MB flash, no PSRAM)"
+needs_boot_mode = true
+port_changes_on_reset = true
+flash_mode = "dio"
+flash_freq = "80m"
+group = "Headless (No Display)"
+
+[boards.seeed-xiao-esp32s3-safe]
+name = "Seeed XIAO ESP32-S3 (Safe Upload)"
+env = "seeed-xiao-esp32s3-safe"
+chip = "esp32s3"
+description = "Safe recovery path: always upload via PlatformIO offset layout, no factory-bin flash"
+needs_boot_mode = true
+port_changes_on_reset = true
+flash_mode = "dio"
+flash_freq = "40m"
+group = "Headless (No Display)"
 
 # ============================================================
 # Release Settings
@@ -177,7 +207,7 @@ firmware_suffix = "_firmware.bin"
 
 [monitor]
 # Filters for platformio device monitor
-filters = ["colorize", "esp32_exception_decoder", "time"]
+filters = ["esp32_exception_decoder", "time"]
 # Auto-reconnect on disconnect
 auto_reconnect = true
 # Log to file (empty = disabled)

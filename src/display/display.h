@@ -27,6 +27,7 @@ struct display_data_s {
     // Mining stats
     uint64_t totalHashes;
     double hashRate;
+    double hashRateAvg;
     double bestDifficulty;
     uint32_t sharesAccepted;
     uint32_t sharesRejected;
