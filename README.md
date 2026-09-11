@@ -1,7 +1,6 @@
 # ⚡ SparkMiner con API HTTP + Dashboard TFT + Túnel SuperDMZ
 
-![SparkMiner Dashboard](images/dashboard.png)
-
+![SparkMiner Dashboard](https://raw.githubusercontent.com/BOLANEGRA/SparkMiner/main/images/dashboard.png)
 > Modificación del firmware original de **SparkMiner** que añade una **API HTTP compatible con AxeOS/ESP-Miner**, un **dashboard web estilo TFT** y **acceso remoto vía túnel SuperDMZ**.
 
 **Autor original**: [SneezeGUI](https://github.com/SneezeGUI/SparkMiner)  
@@ -41,7 +40,7 @@
 
 ## 📊 Captura del Dashboard
 
-![Dashboard TFT](images/dashboard.png)
+![SparkMiner Dashboard](https://raw.githubusercontent.com/BOLANEGRA/SparkMiner/main/images/dashboard.png)
 
 El dashboard muestra:
 - **HashRate** actual en tiempo real.
