@@ -444,7 +444,7 @@ void setup() {
     #endif
     Serial.println();
 
-    systemReady = true;
+      systemReady = true;
 }
 
 /**
@@ -453,10 +453,13 @@ void setup() {
  */
 void loop() {
     // Button handling moved to dedicated FreeRTOS task for responsiveness during mining
-    // Yield to FreeRTOS tasks
-    vTaskDelay(pdMS_TO_TICKS(100));  // Main loop can sleep longer now
-}
 
+    // Process WiFiManager and stats API server
+    wifi_manager_process();
+
+    // Yield to FreeRTOS tasks
+    vTaskDelay(pdMS_TO_TICKS(5));  // Más responsivo para la API (era 100)
+}
 /**
  * Disable ESP32 power management for consistent performance
  * From BitsyMiner - critical for maintaining hashrate
@@ -580,7 +583,6 @@ void setupTasks() {
         Serial.println("[INIT] Configure via captive portal or SD card config.json");
     }
 }
-
 /**
  * Print startup banner
  */

@@ -1,30 +1,12 @@
-# PlatformIO
 .pio/
-.venv/
-
-# Dirty/dev firmware builds (clean releases are tracked)
-firmware/*-dirty/
-firmware/dev/
-
-# Build output logs
-build_*.txt
-*.log
-
-# Logs directory
-logs/
-
-# Development notes
-docs/
-.claude/
-
-# IDE
 .vscode/
-.idea/
-
-# OS files
+backups/
+firmware/
+logs/
+*.bin
+*.elf
+*.map
+*.log
+TOKEN.txt
 .DS_Store
 Thumbs.db
-nul
-
-# Local config (sensitive)
-config.json

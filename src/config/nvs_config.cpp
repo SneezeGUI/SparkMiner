@@ -585,7 +585,8 @@ void nvs_config_reset(miner_config_t *config) {
     config->statsApiUrl[0] = '\0';    // No custom API endpoint
     config->statsProxyUrl[0] = '\0';  // No proxy by default
     config->enableHttpsStats = false; // Direct HTTPS disabled (causes WDT crashes)
-
+    // Stats API Server default - disabled (zero hashrate cost unless enabled)
+    config->apiEnabled = false;
     config->checksum = 0;  // Will be calculated on save
 }
 

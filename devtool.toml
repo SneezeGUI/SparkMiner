@@ -85,6 +85,15 @@ flash_freq = "40m"
 needs_boot_mode = false
 group = "Headless (No Display)"
 
+[boards.esp32-headless-old]
+name = "ESP32 Headless (Old chips)"
+env = "esp32-headless-old"
+chip = "esp32"
+description = "ESP32 D0WDQ6 rev v1.0 (2016) - firmware conservador"
+flash_freq = "40m"
+needs_boot_mode = false
+group = "Headless (No Display)"
+
 [boards.esp32-s3-devkit]
 name = "ESP32-S3 DevKit"
 env = "esp32-s3-devkit"

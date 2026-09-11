@@ -53,7 +53,8 @@ typedef struct {
     char statsApiUrl[128];      // Custom unified stats API endpoint (HTTP, no SSL)
     char statsProxyUrl[128];    // HTTP proxy for stats APIs (supports auth)
     bool enableHttpsStats;      // Manual override for direct HTTPS (default: false)
-
+    // Stats API Server (incoming requests - AxeOS compatible)
+    bool apiEnabled;            // Master enable/disable for HTTP stats API (default: false)
     // Checksum for validation
     uint32_t checksum;
 } miner_config_t;
