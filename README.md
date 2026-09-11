@@ -1,769 +1,305 @@
-# SparkMiner v2.9.5
+# ⚡ SparkMiner con API HTTP + Dashboard TFT + Túnel SuperDMZ
 
-**High-performance Bitcoin solo miner for ESP32, ESP32-S3 & ESP32-C3**
+![SparkMiner Dashboard](images/dashboard.png)
 
-<img src="images/1767589853452.jpg" alt="SparkMiner Display" width="575">
+> Modificación del firmware original de **SparkMiner** que añade una **API HTTP compatible con AxeOS/ESP-Miner**, un **dashboard web estilo TFT** y **acceso remoto vía túnel SuperDMZ**.
 
-SparkMiner is optimized firmware for ESP32-based boards with displays, delivering **~1+ MH/s** (pool-reported) using hardware-accelerated SHA-256 and pipelined assembly mining. Supports both ESP32 "Cheap Yellow Display" (CYD) boards and ESP32-S3 variants.
-
-> **Solo Mining Disclaimer:** Solo mining on an ESP32 is a lottery. The odds of finding a block are astronomically low (~1 in 10^20 per hash at current difficulty). This project is for education, fun, and supporting network decentralization - not profit.
+**Autor original**: [SneezeGUI](https://github.com/SneezeGUI/SparkMiner)  
+**Modificaciones**: [BOLANEGRA](https://github.com/BOLANEGRA)  
+**Licencia**: GPL v3
 
 ---
 
-## Quick Start
+## ✨ Características añadidas
 
-### Option 1: Launcher + SD Card (Recommended for CYD Boards)
+### 🌐 API HTTP compatible con AxeOS/ESP-Miner
+- **Endpoints**:
+  - `GET /api/system/info` → Información general del minero
+  - `GET /api/system/statistics` → Estadísticas detalladas
+- **Compatible con**: HashWatcher, Home Assistant, AxeOS Dashboard, y cualquier cliente HTTP.
+- **Formato JSON** idéntico al de ESP-Miner.
 
-The easiest way to install and manage SparkMiner on CYD boards (1-USB or 2-USB variants):
+### 🎨 Dashboard web estilo TFT
+- Réplica visual de la pantalla física de SparkMiner.
+- **Diseño oscuro** con acentos naranjas apagados.
+- **Responsive** (funciona en móvil, tablet y PC).
+- **Auto-refresh** cada 5 segundos.
+- **URL local**: `http://<IP_DEL_ESP32>/`
 
-**Step 1: Flash the Launcher (one-time)**
-1. Go to [Bruce Launcher Web Flasher](https://bmorcelli.github.io/Launcher/webflasher.html)
-2. Connect your CYD board via USB
-3. Select your board type and click **Install**
-4. The Launcher provides a boot menu for multiple firmwares
+### 🎛️ Activación desde el portal
+- Nuevo desplegable **"Stats API Server"** (`Enabled`/`Disabled`) en el portal de configuración.
+- **Por defecto: Disabled** (no consume hashrate si no se activa).
+- **Coste cero de hashrate** cuando está desactivado.
 
-**Step 2: Prepare SD Card**
-1. Format a microSD card as **FAT32**
-2. Download `cyd-2usb_firmware.bin` (or your board variant) from [Releases](https://github.com/SneezeGUI/SparkMiner/releases)
-3. Copy the `.bin` file to the SD card root
-4. Create a `config.json` file (see Configuration section)
-5. Insert SD card into CYD
+### 🔒 Túnel SuperDMZ para acceso remoto
+- **Acceso HTTPS** desde cualquier lugar, sin abrir puertos en el router.
+- **URL pública**: `https://tu-nombre.dmzgate.com`
+- **Autenticación**: usuario + contraseña.
+- **Sin necesidad de PC encendida** ni Raspberry Pi.
 
-**Step 3: Boot SparkMiner**
-1. Power on the CYD - the Launcher menu appears
-2. Select SparkMiner firmware from the SD card
-3. SparkMiner loads your config and starts mining!
+---
 
-**Why use the Launcher?**
-- Easy firmware updates - just replace the `.bin` on SD card
-- Switch between multiple firmwares
-- No need to re-flash via USB for updates
-- Config persists on SD card
+## 📊 Captura del Dashboard
 
+![Dashboard TFT](images/dashboard.png)
 
-### Option 2: Direct USB Flashing
+El dashboard muestra:
+- **HashRate** actual en tiempo real.
+- **Shares** aceptadas/rechazadas.
+- **Best Difficulty**.
+- **Uptime**, **Templates**, **Blocks**, **Sessions**.
+- **Pool**, **Diff**, **IP**, **Ping**.
+- **LEDs de estado**: SDC, WiFi, POOL.
 
-1. Download the latest `*_factory.bin` firmware from [Releases](https://github.com/SneezeGUI/SparkMiner/releases)
-2. Flash using [ESP Web Flasher](https://esp.huhn.me/) or esptool:
-   ```bash
-   esptool.py --chip esp32 --port COM3 write_flash 0x0 cyd-2usb_factory.bin
-   ```
-3. Power on the board - it will create a WiFi access point
-4. Connect to `SparkMiner-XXXX` WiFi and configure via the web portal
+---
 
+## 🚀 Instalación paso a paso
 
-### Option 3: Build from Source
+### 📦 Requisitos
+
+- **Hardware**: Wemos D1 R32 (o cualquier ESP32 compatible con SparkMiner).
+- **Software**:
+  - Python 3.10+
+  - PlatformIO Core (`pip install platformio`)
+  - Git
+- **Cuenta SuperDMZ** (gratis): https://superdmz.com
+
+### Paso 1: Clonar el repositorio
 
 ```bash
-# Clone repository
-git clone https://github.com/SneezeGUI/SparkMiner.git
+git clone https://github.com/BOLANEGRA/SparkMiner.git
 cd SparkMiner
+```
 
-# Create virtual environment and install dependencies
-python -m venv .venv
-.venv\Scripts\activate  # Windows
-# source .venv/bin/activate  # Linux/Mac
+### Paso 2: Instalar PlatformIO
+
+```bash
 pip install platformio
+```
 
+Verifica:
+```bash
+pio --version
+```
 
-# Use the interactive devtool (recommended)
-devtool.bat          # Windows - interactive menu
-python devtool.py    # Cross-platform
+### Paso 3: Crear tu cuenta SuperDMZ
 
-# Or configure a device via WiFi AP (no SD card needed):
-python scripts/config_miner.py --host 192.168.4.1 --ssid "YourWiFi" --wifi-password "YourPass" --wallet "bc1q..." [other options]
+1. Ve a https://superdmz.com
+2. Crea una cuenta gratuita.
+3. Crea un **nuevo túnel**:
+   - **Nombre**: `tu-nombre`
+   - **Servidor**: el más cercano (ej: São Paulo)
+   - **Protocolo**: HTTP/HTTPS
+   - **Puerto local**: `80`
+   - **Control de acceso**: Autenticado
+   - **Usuario y contraseña**: a tu elección
+4. Copia el **token de 48 caracteres** que te dará SuperDMZ.
 
-See the "Command-Line Configuration Tool" section below for details.
+### Paso 4: Editar el token en el código
 
-# Or build a specific board directly
-python devtool.py build -b cyd-2usb
-python devtool.py flash -b cyd-2usb
-python devtool.py monitor
+Abre `src/config/wifi_manager.cpp` con un editor de texto.
 
-# Wemos Lolin32 + OLED
-python devtool.py build -b wemos-lolin32-oled
-python devtool.py flash -b wemos-lolin32-oled
+**Busca** (`Ctrl+F`):
 
-# All-in-one: build, flash, and monitor
-python devtool.py all -b cyd-2usb
+```cpp
+const char* SUPERDMZ_TOKEN = "TU_TOKEN_SUPERDMZ_AQUI";
+```
+
+**Reemplaza** `TU_TOKEN_SUPERDMZ_AQUI` por tu token real:
+
+```cpp
+const char* SUPERDMZ_TOKEN = "a1b2c3d4e5f6...";
+```
+
+⚠️ **Importante**: el token debe tener exactamente 48 caracteres.
+
+### Paso 5: Compilar el firmware
+
+```bash
+python devtool.py build -b esp32-headless
+```
+
+Espera a ver `[SUCCESS] Build completed!`
+
+### Paso 6: Flashear el firmware
+
+Conecta tu Wemos D1 R32 por USB.
+
+```bash
+python devtool.py flash -b esp32-headless
+```
+
+Selecciona el puerto cuando pregunte.
+
+### Paso 7: Configurar el minero
+
+El ESP32 arrancará en **modo portal de configuración**.
+
+1. **Conéctate al WiFi** `SparkMiner_XXXX` (password: `minebitcoin`).
+2. **Abre** `http://192.168.4.1`
+3. **Rellena el formulario**:
+   - **WiFi**: tu red doméstica
+   - **BTC Wallet**: tu dirección de Bitcoin
+   - **Worker Name**: `SparkMiner`
+   - **Primary Pool URL**: `solo.ckpool.org`
+   - **Primary Pool Port**: `3333`
+   - **Primary Pool Password**: `x`
+   - **Stats API Server**: **`Enabled`** ← **IMPORTANTE**
+4. **Pulsa Save**.
+
+### Paso 8: Verificar el funcionamiento
+
+Abre el monitor serie:
+
+```bash
+python devtool.py monitor -b esp32-headless
+```
+
+Deberías ver algo como:
+
+```
+[WIFI] Connected! IP: 192.168.101.30
+[API] Server started on port 80 (http://192.168.101.30/)
+[TUNNEL] SuperDMZ iniciado correctamente
+[SuperDMZ:ready] ONLINE: https://tu-nombre.dmzgate.com
+[STRATUM] Authorized as 1...SparkMiner
+[STATS] Hashrate: 715000 H/s
+```
+
+### Paso 9: Acceder al dashboard
+
+**Local** (desde tu red WiFi):
+
+```
+http://192.168.101.30/
+```
+
+**Remoto** (desde cualquier lugar):
+
+```
+https://tu-nombre.dmzgate.com
 ```
 
 ---
 
-## Firmware Types
+## 📡 Endpoints de la API
 
-Understanding the difference between the firmware files:
+### `GET /api/system/info`
 
-- **`*_firmware.bin`**: The application only. Use this for **Launcher/SD card updates** or OTA updates. It does not include the bootloader.
-- **`*_factory.bin`**: The complete image (Bootloader + Partition Table + App). Use this for **direct USB flashing** (Option 2) to a blank board or to restore a board.
-
----
-
-## Upgrading
-
-To upgrade from an older version:
-
-1. **Via SD Card (Launcher):** Replace the `*_firmware.bin` file on your SD card with the new version (e.g., `cyd-2usb_firmware.bin`).
-2. **Via USB:** Flash the new `*_factory.bin` using the interactive `devtool.py` or esptool.
-
-> **Note:** NVS stats are persistent across standard reboots, but a full flash *might* clear NVS depending on your method. The SD card backup (`/stats.json`) ensures your lifetime totals can be restored.
-
----
-
-## Which Firmware Do I Download?
-
-Find your board below and download the matching firmware from [Releases](https://github.com/SneezeGUI/SparkMiner/releases).
-
-### CYD (Cheap Yellow Display) Boards - 2.8" TFT
-
-| Your Board | Firmware File | Notes |
-|------------|---------------|-------|
-| **CYD 2-USB** (Type-C + Micro USB) | `cyd-2usb_firmware.bin` | Most common, dual USB ports |
-| **CYD 1-USB** (Single Micro USB) | `cyd-1usb_firmware.bin` | Single USB, ILI9341 display |
-| **CYD 1-USB ST7789** | `cyd-1usb-st7789_firmware.bin` | ST7789 display variant |
-| **ESP32-2432S028R** | `cyd-1usb_firmware.bin` | Same as CYD 1-USB |
-| **ESP32-2432S028R 2-USB** | `cyd-2usb_firmware.bin` | Same as CYD 2-USB |
-
-### ESP32-S3 Boards
-
-| Your Board | Firmware File | Notes |
-|------------|---------------|-------|
-| **Freenove ESP32-S3** (FNK0104) | `freenove-s3_firmware.bin` | 2.8" IPS display, SD_MMC |
-| **Freenove ESP32-S3-WROOM CAM** | `freenove-s3_firmware.bin` | Same board, ignore camera |
-| **ESP32-S3 DevKit** | `esp32-s3-devkit_firmware.bin` | Headless (no display) |
-| **Wemos/Lolin S3 Mini** | `esp32-s3-mini_firmware.bin` | RGB LED status indicator |
-| **WeAct S3 Mini** | `esp32-s3-mini_firmware.bin` | Compatible with Lolin |
-| **ESP32-S3 + SSD1306 OLED** | `esp32-s3-oled_firmware.bin` | 128x64 I2C OLED |
-
-### ESP32-C3 Boards
-
-| Your Board | Firmware File | Notes |
-|------------|---------------|-------|
-| **ESP32-C3 SuperMini** | `esp32-c3-supermini_firmware.bin` | Headless, ultra-compact |
-| **ESP32-C3 + SSD1306 OLED** | `esp32-c3-oled_firmware.bin` | 128x64 I2C OLED |
-| **Seeed XIAO ESP32-C3** | `esp32-c3-supermini_firmware.bin` | Use SuperMini firmware |
-
-### Generic ESP32 Boards
-
-| Your Board | Firmware File | Notes |
-|------------|---------------|-------|
-| **ESP32 DevKit** | `esp32-headless_firmware.bin` | Any generic ESP32, GPIO LED status |
-| **ESP32-WROOM-32** | `esp32-headless_firmware.bin` | Headless — GPIO LED on pin 2 |
-| **Wemos Lolin32 + OLED** | `wemos-lolin32-oled_firmware.bin` | 128x64 SSD1306 I2C (SDA=5, SCL=4, RST=16, addr=0x3C) |
-| **NodeMCU ESP32** | `esp32-headless_firmware.bin` | Use headless firmware |
-
-### File Types
-
-- **`*_firmware.bin`** - Use with **Bruce Launcher** or SD card boot
-- **`*_factory.bin`** - Use for **direct USB flashing** (includes bootloader)
-
----
-
-## Hardware
-
-### Performance by Chip
-
-| Chip | Hashrate | Notes |
-|------|----------|-------|
-| **ESP32** (dual-core) | ~715 KH/s | Best performance, hardware SHA-256 |
-| **ESP32-S3** (dual-core) | ~280-400 KH/s | Software SHA-256, more RAM |
-| **ESP32-C3** (single-core) | ~200-300 KH/s | RISC-V, lowest power |
-
-### Board Compatibility Status
-
-| Board | Status | Notes |
-|-------|--------|-------|
-| CYD (ESP32-2432S028) | ✅ Full | Primary target, 3 variants |
-| Freenove ESP32-S3 | ✅ Full | 2.8" IPS with SD_MMC |
-| ESP32-S3/C3 + OLED | ✅ Full | 128x64 SSD1306 I2C |
-| Wemos Lolin32 + OLED | ✅ Full | 128x64 SSD1306 I2C (SDA=GPIO5, SCL=GPIO4, RST=GPIO16, addr=0x3C) |
-| ESP32-S3/C3 Mini | ✅ Full | RGB LED status |
-| ESP32 Headless | ✅ Full | GPIO LED status indicator |
-| LILYGO T-Display S3 | ❌ None | Not yet supported |
-| LILYGO T-Display V1 | ❌ None | Not yet supported |
-| ESP32-S2 boards | ❌ None | Single-core not supported |
-| M5Stack boards | ❌ None | Not configured |
-
-**Legend:** ✅ Supported | ❌ Not supported
-
-### Where to Buy
-
-- **AliExpress:** Search "ESP32-2432S028" for CYD boards (~$4-16 USD)
-- **Amazon:** Search "CYD ESP32 2.8 inch" or "Freenove ESP32-S3" (~$15-25 USD)
-- **Freenove Store:** [FNK0104 ESP32-S3 Display](https://store.freenove.com/) (~$20 USD)
-
-### Hardware Features
-
-- **CPU:** Dual-core Xtensa LX6 @ 240MHz (ESP32), LX7 (S3), or single-core RISC-V (C3)
-- **Display:** TFT (ILI9341/ST7789) or OLED (SSD1306)
-- **Storage:** MicroSD card slot (select boards)
-- **Connectivity:** WiFi 802.11 b/g/n
-- **RGB LED:** Status indicator (S3 Mini, Headless-LED boards)
-- **GPIO LED:** Simple blink status indicator (Headless boards, pin 2)
-- **Button:** Boot button for interaction
-
----
-
-## Configuration
-
-
-SparkMiner can be configured in three ways (in order of priority):
-
-### 1. SD Card Configuration (Recommended)
-
-Create a `config.json` file on a FAT32-formatted microSD card:
+Devuelve información general del minero:
 
 ```json
 {
-  "ssid": "YourWiFiName",
-  "wifi_password": "YourWiFiPassword",
-  "pool_url": "public-pool.io",
-  "pool_port": 21496,
-  "wallet": "bc1qYourBitcoinAddressHere",
-  "worker_name": "SparkMiner-1",
-  "pool_password": "x",
-  "brightness": 100
+  "deviceModel": "ESP32-Headless",
+  "firmwareVersion": "dev",
+  "hostname": "SparkMiner",
+  "hashRate": 715506.03,
+  "hashRateString": "715.51 kH/s",
+  "sharesAccepted": 0,
+  "sharesRejected": 0,
+  "bestDifficulty": 0.0042,
+  "blocksFound": 0,
+  "uptimeSeconds": 123,
+  "sessionCount": 1,
+  "pool": "solo.ckpool.org",
+  "poolPort": 3333,
+  "wallet": "bc1q...",
+  "worker": "SparkMiner"
 }
 ```
 
-#### Configuration Options
+### `GET /api/system/statistics`
 
-| Field | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `ssid` | Yes | - | Your WiFi network name |
-| `wifi_password` | Yes | - | Your WiFi password |
-| `pool_url` | Yes | `public-pool.io` | Mining pool hostname |
-| `pool_port` | Yes | `21496` | Mining pool port |
-| `wallet` | Yes | - | Your Bitcoin address (receives payouts) |
-| `worker_name` | No | `SparkMiner` | Identifier shown on pool dashboard |
-| `pool_password` | No | `x` | Pool password (usually `x`) |
-| `brightness` | No | `100` | Display brightness (0-100) |
-| `screen_timeout` | No | `0` | Screen auto-off timeout in seconds (0=never, 30, 60, 120, 300) |
-| `rotation` | No | `1` | Screen rotation (0-3) |
-| `invert_colors` | No | `false` | Invert display colors |
-| `backup_pool_url` | No | - | Failover pool hostname |
-| `backup_pool_port` | No | - | Failover pool port |
-| `backup_wallet` | No | - | Wallet for backup pool |
-| `stats_enabled` | No | `true` | Enable/disable live stats fetching |
-| `stats_api_url` | No | - | Custom stats API endpoint (HTTP) |
-| `stats_proxy_url` | No | - | HTTP proxy for HTTPS APIs |
-| `enable_https_stats` | No | `false` | Direct HTTPS (unstable) |
-
-
-### 2. WiFi Access Point Portal
-
-You can also automate configuration via the included Python tool:
-
-```bash
-python scripts/config_miner.py --host 192.168.4.1 --ssid "YourWiFi" --wifi-password "YourPass" --wallet "bc1q..."
-```
-This tool submits configuration directly to the device's AP portal. Run with `--help` for all options.
-
-If no SD card config is found, SparkMiner creates a WiFi access point:
-
-1. **Connect** to WiFi network: `SparkMiner-XXXX` (password: minebitcoin)
-2. **Open browser** to `http://192.168.4.1`
-3. You will see the **new dark-themed portal** with full configuration options:
-    - Primary & Backup Pool settings
-    - Display brightness, rotation, and color inversion
-    - Target difficulty
-4. **Configure** your settings, click **Save**, and the device will reboot and connect.
-
-### 3. NVS (Non-Volatile Storage)
-
-Configuration is automatically saved to flash memory after first successful setup. To reset:
-- Long-press BOOT button (1.5s) during operation for 3-second countdown reset, OR
-- Hold BOOT button for 5 seconds at power-on, OR
-- Reflash the firmware
-
----
-
-## Persistent Mining Stats
-
-SparkMiner automatically saves mining statistics to ensure your lifetime totals are preserved across reboots and power cycles.
-
-- **NVS Persistence:** Stats are saved to the device's non-volatile storage.
-  - **Triggers:** First share found, 5 minutes after boot, and hourly thereafter.
-  - **Data:** Lifetime hashes, shares (accepted/rejected), best difficulty, and blocks found.
-- **SD Card Backup:** If an SD card is present, stats are also backed up to `/stats.json` for disaster recovery. This survives firmware updates and factory resets.
-- **Reset:** A factory reset (long-press BOOT) will clear NVS stats. Delete `/stats.json` from the SD card to fully reset.
-
----
-
-## Live Stats Configuration
-
-SparkMiner displays live Bitcoin price, network hashrate, difficulty, and fee estimates. These external APIs use HTTPS, which is memory-intensive for the ESP32 and can impact mining hashrate.
-
-SparkMiner supports three modes for fetching external stats (in priority order):
-
-### Priority 1: Custom Stats API (Recommended)
-
-If you're running a stratum proxy (e.g., for solo mining via VPN), you can extend it to serve aggregated stats via HTTP. This is the most efficient option - single HTTP call, zero SSL overhead.
+Devuelve estadísticas detalladas:
 
 ```json
 {
-  "stats_enabled": true,
-  "stats_api_url": "http://192.168.1.100:3334/stats"
+  "sessionHashes": 64273341,
+  "sessionShares": 0,
+  "sessionAccepted": 0,
+  "sessionRejected": 0,
+  "sessionBlocks": 0,
+  "sessionBestDifficulty": 0.013403822,
+  "sessionTemplates": 3,
+  "avgLatencyMs": 279,
+  "lifetimeHashes": 143250791,
+  "lifetimeShares": 0,
+  "lifetimeAccepted": 0,
+  "lifetimeRejected": 0,
+  "lifetimeBlocks": 0,
+  "lifetimeUptimeSeconds": 300,
+  "bestDifficultyEver": 0.014719055
 }
 ```
 
-**Expected API response format:**
-```json
-{
-  "btc_price_usd": 94100,
-  "block_height": 880000,
-  "network_hashrate": "600.00 EH/s",
-  "network_difficulty": "90.00T",
-  "fee_half_hour": 5,
-  "fee_fastest": 10,
-  "workers": 4,
-  "pool_name": "My Pool",
-  "failovers": 0,
-  "pool_hashrate": "50.00 PH/s",
-  "worker_hashrate": "1.50 MH/s",
-  "address_best_diff": "100.00K",
-  "difficulty_progress": 45.0,
-  "difficulty_change": -2.5,
-  "difficulty_retarget_blocks": 1100
-}
-```
+### `GET /`
 
-### Priority 2: HTTP Proxy (SSL Bumping)
+Dashboard HTML estilo TFT.
 
-Run an HTTP-to-HTTPS proxy that handles SSL/TLS offloading:
+---
+
+## 🔧 Solución de problemas
+
+### Error: `PlatformIO not found`
 
 ```bash
-# Using Node.js (save scripts/cloudflare_stats_proxy.js as proxy.js)
-npm install -g wrangler
-wrangler dev proxy.js --port 8080
-
-# Or use any HTTP-to-HTTPS proxy like:
-# - nginx with proxy_pass
-# - Caddy with reverse_proxy
-# - mitmproxy
+pip install platformio
 ```
 
-```json
-{
-  "stats_enabled": true,
-  "stats_proxy_url": "http://192.168.1.100:8080"
-}
-```
+Si `pio` no funciona, usa `python -m platformio`.
 
-### Priority 3: Direct HTTPS (Not Recommended)
+### Error: `Failed to connect to ESP32`
 
-Fetch HTTPS APIs directly on the ESP32. This uses ~30KB extra RAM and may cause mining interruptions or watchdog resets.
+- Comprueba el cable USB.
+- Baja la velocidad de flasheo:
+  ```bash
+  python -m esptool --chip esp32 --port COM7 --baud 115200 write-flash -z 0x0 firmware\v2.9.5-10-g8036985-dirty\esp32-headless_factory.bin
+  ```
+- Para chips antiguos (ESP32-D0WDQ6), usa `--baud 57600`.
 
-```json
-{
-  "stats_enabled": true,
-  "enable_https_stats": true
-}
-```
+### El dashboard no carga
 
-### Disable Stats Entirely
+- Verifica que `Stats API Server` está en `Enabled` en el portal.
+- Comprueba la IP del ESP32 en el monitor serie.
 
-If you don't need live stats and want maximum stability:
+### El túnel SuperDMZ no conecta
 
-```json
-{
-  "stats_enabled": false
-}
-```
+- Verifica que el token está bien copiado (48 caracteres).
+- Comprueba que el túnel está activo en el panel de SuperDMZ.
+- Reinicia el ESP32.
 
-### Configuration Reference
+### Error: `HTTP 400` en el túnel
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `stats_enabled` | `true` | Master switch for live stats |
-| `stats_api_url` | - | Custom HTTP endpoint (highest priority) |
-| `stats_proxy_url` | - | HTTP proxy for HTTPS APIs |
-| `enable_https_stats` | `false` | Direct HTTPS fetching (unstable) |
+El token está mal o falta. Verifica en `wifi_manager.cpp`.
 
 ---
 
-## Pool Configuration
+## 📊 Compatibilidad
 
-### Recommended Pools
-
-| Pool | URL | Port | Fee | Notes |
-|------|-----|------|-----|-------|
-| **Public Pool** | `public-pool.io` | `21496` | 0% | Recommended, solo mining |
-| **FindMyBlock EU** | `eu.findmyblock.xyz` | `3335` | 0% | Solo mining, EU server |
-| **CKPool Solo** | `solo.ckpool.org` | `3333` | 0.5% | Solo mining |
-| **Braiins Pool** | `stratum.braiins.com` | `3333` | 2% | Pooled mining |
-
-### Bitcoin Address Formats
-
-SparkMiner supports all standard Bitcoin address formats:
-
-- **Bech32 (bc1q...)** - Native SegWit, lowest fees (recommended)
-- **Bech32m (bc1p...)** - Taproot addresses
-- **P2SH (3...)** - SegWit-compatible
-- **Legacy (1...)** - Original format
-
-> **Important:** Use YOUR OWN wallet address. Never use an exchange deposit address for mining.
+| Chip | Funciona | Notas |
+| :--- | :--- | :--- |
+| **ESP32-D0WD-V3** (2019+) | ✅ Sí | Compatible, ~715 kH/s |
+| **ESP32-D0WDQ6** (2016) | ⚠️ Parcial | Flashear a 57600 baud. Puede tener inestabilidad |
 
 ---
 
-## Button Controls
+## 🙏 Agradecimientos
 
-The BOOT button (closest to USB-C) provides these actions:
-
-| Action | Function | Notes |
-|--------|----------|-------|
-| **Single click** | Cycle screens | Mining → Stats → Clock |
-| **Double click** | Cycle rotation (0°→90°→180°→270°) | Rotation saved to NVS |
-| **Triple click** | Toggle color inversion | Saved to NVS |
-| **Long press (1.5s)** | Factory reset | 3-second countdown, release to cancel |
-| **Hold at boot (5s)** | Factory reset | Alternative if UI is unresponsive |
-
-> **Note:** Buttons remain responsive during mining thanks to a dedicated FreeRTOS task. If screen timeout is enabled, the first button press wakes the display instead of performing its normal action.
+- **[SneezeGUI](https://github.com/SneezeGUI/SparkMiner)** por crear SparkMiner, el firmware base.
+- **SuperDMZ** por el servicio de túnel.
+- **Comunidad ESP32** por las librerías utilizadas (WiFiManager, ArduinoJson, etc.).
 
 ---
 
-## Display Orientation
+## 📄 Licencia
 
-You can change the screen rotation by double-clicking the BOOT button or setting `"rotation"` in `config.json`.
-
-| Rotation | Orientation | USB Position |
-|----------|-------------|--------------|
-| 0 | Portrait | Right side |
-| 1 | Landscape | Bottom (default) |
-| 2 | Portrait | Left side |
-| 3 | Landscape | Top |
-
-*Note: Portrait mode has a bottom status bar.*
+GPL v3 (heredada del proyecto original).
 
 ---
 
-## Display Screens
-
-SparkMiner has 3 display screens. Press BOOT to cycle:
-
-### Screen 1: Mining Status (Default)
-
-```
-┌─────────────────────────────────┐
-│ SparkMiner v2.9     45C  [●][●] │
-├─────────────────────────────────┤
-│  687.25 KH/s          Shares    │
-│                        12/12    │
-│ Best     Hashes    Uptime       │
-│ 100.0K   47.5M     2h 15m       │
-│ Retarget Blocks    Workers      │
-│ 45% -2%  0         1.5 MH/s     │
-│                                 │
-│ Pool: public-pool.io            │
-│ Diff: 1000.00      Jobs: 47     │
-│ Pool: 50 PH/s      IP: 192.168.x│
-└─────────────────────────────────┘
-```
-
-**Stats Grid:**
-- **Best**: Best difficulty achieved (lifetime)
-- **Hashes**: Total hashes computed
-- **Uptime**: Session uptime
-- **Retarget**: Difficulty adjustment progress + expected change %
-- **Blocks**: Solo blocks found
-- **Workers**: Your combined worker hashrate from pool
-
-### Screen 2: Network Stats
-
-Shows BTC price, block height, network hashrate, fees, and your contribution.
-
-### Screen 3: Clock
-
-Large time display with mining summary at bottom.
-
-### Status Indicators
-
-The display features color-coded indicators for quick health monitoring:
-
-| Indicator | Green | Yellow | Red |
-|-----------|-------|--------|-----|
-| **Temperature** | <50°C | 50-70°C | >70°C |
-| **WiFi Signal** | >-60dBm | -60 to -75dBm | <-75dBm |
-| **Pool Latency** | <100ms | 100-300ms | >300ms |
-
----
-
-## Performance
-
-### Expected Hashrates
-
-| Board | Device Display | Pool Reported | Power | Notes |
-|-------|---------------|---------------|-------|-------|
-| **ESP32-2432S028 (CYD)** | ~715-725 KH/s | ~715-725 KH/s | ~0.5W | Pipelined assembly v2 |
-| **ESP32-S3 (Freenove)** | ~280 KH/s | ~400 KH/s | ~0.4W | Midstate caching v3 |
-| **ESP32 Headless** | ~750 KH/s | ~750 KH/s | ~0.3W | No display overhead |
-
-> **Note:** Pool-reported hashrate is typically higher than device display due to share submission timing and pool difficulty adjustments.
-
-### Architecture
-
-SparkMiner uses both ESP32 cores efficiently:
-
-- **Core 1 (High Priority, 19):** Pipelined hardware SHA-256 mining using direct register access and assembly optimization
-- **Core 0 (Low Priority, 1):** WiFi, Stratum protocol, display updates, and software SHA-256 backup mining
-
-**v2.9.5 Features & Architecture:**
-- **Job ID Fix:** Increased job ID buffer to 32 chars, fixing 100% rejection on some pools.
-- **Screen Auto-Off:** Configurable screen timeout (30s–5m) with button wake.
-- **GPIO LED Status:** Headless boards now blink the onboard LED for mining status.
-- **WiFi Robustness:** Disabled power save, faster reconnect, disconnect reason logging.
-- **Display Fix:** Clock screen date no longer superimposes on redraw.
-- **Stratum Proxy Stats:** Pool hashrate, worker hashrate, difficulty adjustment via proxy.
-- **Persistent Stats:** Lifetime mining history preserved via NVS and SD card backups.
-- **Display Support:** OLED (SSD1306) and LCD (ILI9341/ST7789) via abstraction layer.
-- **Multi-Board Support:** ESP32-C3, ESP32-S3, and Headless with LED status.
-- **Optimized Core Usage:**
-  - Core 1: Pipelined assembly SHA-256 (v3) with unrolled loops.
-  - Core 0: Network stack, Stratum, and UI management.
-
----
-
-## Troubleshooting
-
-### WiFi Issues
-
-| Problem | Solution |
-|---------|----------|
-| Won't connect to WiFi | Check SSID/password, ensure 2.4GHz network (not 5GHz) |
-| Keeps disconnecting | Check serial log for `[WIFI] Disconnected, reason: X` - WiFi power save is disabled automatically to improve stability with routers that have aggressive WPA rekey |
-| AP mode not appearing | Hold BOOT 5s at power-on, or long-press during operation |
-
-### Display Issues
-
-| Problem | Solution |
-|---------|----------|
-| White/blank screen | Try `esp32-2432s028-st7789` environment |
-| Inverted colors | Triple-click to toggle, or set `invert_colors` in config.json |
-| Flickering | Reduce SPI frequency in platformio.ini |
-
-### Mining Issues
-
-| Problem | Solution |
-|---------|----------|
-| 0 H/s hashrate | Check pool connection, verify wallet address |
-| Shares rejected | Check wallet address format, pool may be down |
-| High reject rate | Network latency issue, try different pool |
-| "SHA-PIPE WARNING" | Normal during HTTPS requests, doesn't affect mining |
-
-### Serial Debug
-
-Connect via USB and monitor at 115200 baud:
-```bash
-pio device monitor
-# or
-screen /dev/ttyUSB0 115200
-```
-
----
-
-## Building from Source
-
-### Prerequisites
-
-- [PlatformIO](https://platformio.org/) (CLI or VS Code extension)
-- Python 3.8+
-- Git
-
-### DevTool (Recommended)
-
-SparkMiner includes a unified development tool that supports all boards with an interactive menu:
-
-```bash
-# Interactive menu - select board, build, flash, monitor
-devtool.bat              # Windows
-python devtool.py        # Cross-platform
-
-# List all supported boards
-python devtool.py --help
-
-# Build specific board
-python devtool.py build -b cyd-2usb
-python devtool.py build -b freenove-s3
-
-# Flash to specific port
-python devtool.py flash -b cyd-2usb -p COM5
-
-# Monitor serial output
-python devtool.py monitor -p COM5
-
-# All-in-one: build, flash, and monitor
-python devtool.py all -b cyd-2usb -p COM5
-
-# Build release firmware for all boards
-python devtool.py release
-
-# Flash custom firmware file (opens file browser)
-python devtool.py        # Select [F] from menu
-```
-
-**ESP32-S3 Note:** The Freenove ESP32-S3 requires manual bootloader mode entry:
-1. Hold **BOOT** button
-2. Press and release **RESET** button
-3. Release **BOOT** button
-4. The display will be blank - this is normal in download mode
-
-### Manual PlatformIO Commands
-
-```bash
-# List available environments
-pio run --list-targets
-
-# Build specific environment
-pio run -e esp32-2432s028-2usb
-
-# Build and upload
-pio run -e esp32-2432s028-2usb -t upload
-
-# Clean build
-pio run -e esp32-2432s028-2usb -t clean
-
-# Monitor serial output
-pio device monitor
-```
-
-### Manual Flashing with esptool
-
-If you need to flash manually without PlatformIO:
-
-```bash
-# ESP32 (CYD boards) - factory bin at 0x0
-esptool.py --chip esp32 --port COM3 --baud 921600 \
-    write_flash -z --flash-mode dio --flash-freq 40m \
-    0x0 cyd-2usb_factory.bin
-
-# ESP32-S3 (Freenove) - factory bin at 0x0
-esptool.py --chip esp32s3 --port COM5 --baud 921600 \
-    write_flash -z --flash-mode dio --flash-freq 80m \
-    0x0 freenove-s3_factory.bin
-```
-
-### Project Structure
-
-```
-SparkMiner/
-├── src/
-│   ├── main.cpp              # Entry point
-│   ├── config/               # WiFi & NVS configuration
-│   ├── display/              # TFT display driver
-│   ├── mining/               # SHA-256 implementations
-│   │   ├── miner.cpp         # Mining coordinator
-│   │   ├── sha256_hw.cpp     # Hardware SHA (registers)
-│   │   └── sha256_pipelined.h # Pipelined assembly
-│   ├── stats/                # Live stats & monitoring
-│   └── stratum/              # Stratum v1 protocol
-├── include/
-│   └── board_config.h        # Hardware definitions
-├── devtool.py                # Unified build/flash/monitor tool
-├── scripts/
-│   └── config_miner.py       # Command-line WiFi config tool
-├── devtool.bat               # Windows launcher
-├── devtool.toml              # Board & project configuration
-├── platformio.ini            # PlatformIO build settings
-└── README.md
-```
-
----
-
-## FAQ
----
-
-## Command-Line Configuration Tool
-
-The script [`scripts/config_miner.py`](scripts/config_miner.py) lets you configure a SparkMiner device over WiFi from your computer, automating the AP portal process.
-
-### Usage
-
-```bash
-python scripts/config_miner.py --host 192.168.4.1 --ssid "YourWiFi" --wifi-password "YourPass" --wallet "bc1q..." [other options]
-```
-
-**Common options:**
-
-- `--host` (default: 192.168.4.1) — IP or hostname of the SparkMiner AP
-- `--ssid` — WiFi SSID to connect to
-- `--wifi-password` — WiFi password
-- `--wallet` — Bitcoin wallet address
-- `--worker` — Worker name (default: SparkMiner)
-- `--pool-url` — Pool host (default: public-pool.io)
-- `--pool-port` — Pool port (default: 21496)
-- `--brightness` — Display brightness (0-100)
-- `--screen-timeout` — Screen timeout in seconds
-- `--rotation` — Screen rotation (0-3)
-- `--invert` — Invert display colors (1/0)
-- `--stats-en` — Enable live stats (1/0)
-- `--stats-api` — Custom stats API URL
-- `--stats-proxy` — Stats HTTP proxy URL
-- `--https-stats` — Enable HTTPS stats (1/0)
-- `--timeout` — HTTP timeout (seconds)
-- `--insecure` — Skip TLS verification
-
-Run `python scripts/config_miner.py --help` for the full list and details.
-
-This is useful for scripting, automation, or headless device setup without using the web UI.
-
-**Q: Will I actually mine a Bitcoin block?**
-
-A: Extremely unlikely. At ~700 KH/s vs network ~500 EH/s, your odds per block are about 1 in 10^15. It's like winning the lottery multiple times. But someone has to mine blocks, and it could theoretically be you!
-
-**Q: How much electricity does it use?**
-
-A: About 0.5W, or ~4.4 kWh per year (~$0.50-1.00/year in electricity).
-
-**Q: Can I mine other cryptocurrencies?**
-
-A: No, SparkMiner only supports Bitcoin (SHA-256d). Other coins use different algorithms.
-
-**Q: Why is my hashrate lower than expected?**
-
-A: Display updates, WiFi activity, and live stats fetching briefly reduce hashrate. The EMA-smoothed display shows average performance.
-
-**Q: Do I need an SD card?**
-
-A: No, you can configure via the WiFi portal. SD card is just more convenient for headless setup.
-
-**Q: Can I use this with a mining pool that pays regularly?**
-
-A: Yes, but solo pools like Public Pool only pay if YOU find a block. For regular payouts, use a traditional pool, but the amounts will be negligible.
-
----
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
----
-
-## Credits
-
-- **Sneeze** - SparkMiner development
-- **bmorcelli** - [Launcher](https://github.com/bmorcelli/Launcher) & bootloader magic
-- **BitsyMiner** - Pipelined SHA-256 assembly inspiration
-- **NerdMiner** - Stratum protocol reference
-- **ESP32 Community** - Hardware documentation
-
----
-
-## License
-
-GPL v3 License - see [LICENSE](LICENSE) file for details.
-
----
-
-## Support
-
-- **Issues:** [GitHub Issues](https://github.com/SneezeGUI/SparkMiner/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/SneezeGUI/SparkMiner/discussions)
-
-If you find a block, consider donating to support development:
-`bc1qkg83n8lek6cwk4mpad9hrvvun7q0u7nlafws9p`
+## 🔗 Enlaces
+
+- **SparkMiner original**: https://github.com/SneezeGUI/SparkMiner
+- **SuperDMZ**: https://superdmz.com
+- **AxeOS / ESP-Miner** (referencia): https://github.com/skot/ESP-Miner
+- **WiFiManager**: https://github.com/tzapu/WiFiManager
