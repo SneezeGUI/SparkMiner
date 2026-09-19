@@ -31,3 +31,11 @@ jobs:
         run: pip install platformio
       - name: Build ${{ matrix.env }}
         run: pio run -e ${{ matrix.env }}
+      - name: Upload test build
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: testbuild-${{ matrix.env }}
+          path: firmware/**/*_factory.bin
+          if-no-files-found: warn
+          retention-days: 14

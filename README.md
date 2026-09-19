@@ -1,4 +1,4 @@
-# SparkMiner v2.9.5
+# SparkMiner v2.9.6-pre
 
 **High-performance Bitcoin solo miner for ESP32, ESP32-S3 & ESP32-C3**
 
@@ -167,8 +167,8 @@ Find your board below and download the matching firmware from [Releases](https:/
 | Chip | Hashrate | Notes |
 |------|----------|-------|
 | **ESP32** (dual-core) | ~715 KH/s | Best performance, hardware SHA-256 |
-| **ESP32-S3** (dual-core) | ~280-400 KH/s | Software SHA-256, more RAM |
-| **ESP32-C3** (single-core) | ~200-300 KH/s | RISC-V, lowest power |
+| **ESP32-S3** (dual-core) | ~50-55 KH/s | Every share software-verified (#36); faster HW path (~300+ KH/s) in progress — see [#28](https://github.com/SneezeGUI/SparkMiner/issues/28) |
+| **ESP32-C3** (single-core) | TBD | HW SHA now wired with boot self-test (#39); software fallback ~1 KH/s. Numbers pending real-C3 validation ([#34](https://github.com/SneezeGUI/SparkMiner/issues/34)) |
 
 ### Board Compatibility Status
 
@@ -501,7 +501,7 @@ The display features color-coded indicators for quick health monitoring:
 | Board | Device Display | Pool Reported | Power | Notes |
 |-------|---------------|---------------|-------|-------|
 | **ESP32-2432S028 (CYD)** | ~715-725 KH/s | ~715-725 KH/s | ~0.5W | Pipelined assembly v2 |
-| **ESP32-S3 (Freenove)** | ~280 KH/s | ~400 KH/s | ~0.4W | Midstate caching v3 |
+| **ESP32-S3 (Freenove)** | ~50-55 KH/s | ~50-55 KH/s | ~0.4W | Software-first SHA (#36); the old ~280-400 KH/s figures were invalid (zero shares accepted) |
 | **ESP32 Headless** | ~750 KH/s | ~750 KH/s | ~0.3W | No display overhead |
 
 > **Note:** Pool-reported hashrate is typically higher than device display due to share submission timing and pool difficulty adjustments.
