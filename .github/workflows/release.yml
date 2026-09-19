@@ -45,7 +45,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ matrix.env }}
-          path: firmware/**/*.bin
+          # Only this tag's output dir -- firmware/ also holds the committed
+          # historical binaries and must not ship with the release.
+          path: firmware/${{ github.ref_name }}/*.bin
           if-no-files-found: error
 
   release:
@@ -58,14 +60,8 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-      - name: Create release with binaries
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          shopt -s globstar
-          gh release create "${GITHUB_REF_NAME}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "${GITHUB_REF_NAME}" \
-            --prerelease \
-            --generate-notes \
-            artifacts/**/*.bin
+      - uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: artifacts/**/*_factory.bin
