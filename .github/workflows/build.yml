@@ -13,7 +13,8 @@ jobs:
       fail-fast: false
       matrix:
         # Representative env per chip family (classic ESP32 / S3 / C3)
-        env: [esp32-2432s028, esp32-s3-devkit, esp32-c3-supermini]
+        # + OLED variants so display envs get compile coverage
+        env: [esp32-2432s028, esp32-s3-devkit, esp32-c3-supermini, esp32-devkit-oled, wemos-lolin32-oled]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
