@@ -412,8 +412,19 @@ void wifi_manager_init() {
         "});"
         // Run sync after DOM is fully loaded
         "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',syncDropdowns);}else{syncDropdowns();}"
-        // SSID auto-fill when clicking network link
-        "function c(l){console.log('[SSID] Clicked: '+l.innerText);var s=document.querySelector('input[name=\"s\"]');if(s){s.value=l.innerText||l.textContent;console.log('[SSID] Set to: '+s.value);}}"
+        // SSID auto-fill when clicking network link.
+        // Read data-ssid first: WiFiManager renders the *visible* link text with
+        // htmlEntities(ssid, true), which turns every space into &#160; (U+00A0
+        // non-breaking space). Using innerText therefore submits an SSID the
+        // ESP32 scan can never match, failing with reason 201 (NO_AP_FOUND) on
+        // any network whose name contains a space. data-ssid keeps real spaces.
+        "function c(l){"
+        "var s=document.querySelector('input[name=\"s\"]');"
+        "if(s){"
+        "var v=l.getAttribute('data-ssid')||l.innerText||l.textContent||'';"
+        "s.value=v.replace(/\\u00a0/g,' ');"  // normalize NBSP on fallback paths
+        "console.log('[SSID] Set to: '+JSON.stringify(s.value));"
+        "}}"
         "</script>";
     s_wm.setCustomHeadElement(customCSS);
 
