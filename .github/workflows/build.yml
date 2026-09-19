@@ -36,6 +36,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: testbuild-${{ matrix.env }}
-          path: firmware/**/*_factory.bin
+          # Shallow PR checkouts make post_build_merge.py fall back to "dev"
+          # for its output dir; firmware/ also holds committed historical
+          # binaries that must not be uploaded.
+          path: firmware/dev/*_factory.bin
           if-no-files-found: warn
           retention-days: 14
