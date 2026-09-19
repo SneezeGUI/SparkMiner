@@ -130,6 +130,14 @@ needs_boot_mode = true
 port_changes_on_reset = true
 group = "OLED Display"
 
+[boards.esp32-devkit-oled]
+name = "ESP32 DevKit OLED"
+env = "esp32-devkit-oled"
+chip = "esp32"
+description = "Generic ESP32/WROOM with 128x64 SSD1306 OLED (SDA=GPIO21, SCL=GPIO22, addr=0x3C)"
+needs_boot_mode = false
+group = "OLED Display"
+
 [boards.wireless-paper]
 name = "Heltec Wireless Paper"
 env = "wireless-paper"
