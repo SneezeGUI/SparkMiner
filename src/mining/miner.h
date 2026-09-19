@@ -63,6 +63,14 @@ void miner_task_core0(void *param);
 void miner_task_core1(void *param);
 
 /**
+ * One-shot boot self-test for single-core (C3/S2) builds: verifies the
+ * raw-register HW double-hash against the software reference so unproven
+ * silicon falls back to the software miner instead of failing silently.
+ * Only defined for single-core targets (issue #34).
+ */
+bool miner_c3s2_hw_sha_selftest(void);
+
+/**
  * Set pool difficulty for share validation
  */
 void miner_set_difficulty(double poolDifficulty);

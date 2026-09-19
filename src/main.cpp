@@ -562,21 +562,23 @@ void setupTasks() {
 
             Serial.println("[INIT] All tasks created (dual-core mining)");
         #else
-            // Single-core (C3, S2): one HARDWARE-SHA miner task, not pinned.
-            // Uses the full double-hash HW path (sha256_ll_double_hash_full); the
-            // midstate-restore path is unsupported on these chips (issue #34). Runs at
-            // low priority and yields frequently so WiFi/Stratum/Monitor stay alive on
-            // the single shared core.
+            // Single-core (C3, S2): one miner task, not pinned. Prefer the HW
+            // full double-hash path (sha256_ll_double_hash_full), but gate it on
+            // a boot self-test against the software reference -- untested silicon
+            // must not fail silently with a fast counter and zero shares (#34).
+            // Falls back to the software miner (pre-#39 behavior) on mismatch.
+            bool hwShaOk = miner_c3s2_hw_sha_selftest();
             xTaskCreate(
-                miner_task_core1,
+                hwShaOk ? miner_task_core1 : miner_task_core0,
                 "Miner",
-                MINER_1_STACK,
+                hwShaOk ? MINER_1_STACK : MINER_0_STACK,
                 NULL,
                 MINER_0_PRIORITY,
-                &miner1Task
+                hwShaOk ? &miner1Task : &miner0Task
             );
 
-            Serial.println("[INIT] All tasks created (single-core HW-SHA mining)");
+            Serial.printf("[INIT] All tasks created (single-core %s mining)\n",
+                          hwShaOk ? "HW-SHA" : "software");
         #endif
     } else {
         Serial.println("[INIT] Monitor task created (mining disabled - no wallet)");

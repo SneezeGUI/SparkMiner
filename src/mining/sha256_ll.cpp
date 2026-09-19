@@ -371,11 +371,13 @@ bool IRAM_ATTR sha256_ll_double_hash_full(const uint8_t *header, uint32_t nonce,
     return ll_read_digest_if(hash_out);
 #else
     // ESP32-S2/S3/C3: full double SHA-256 with NO external midstate injection.
-    // These chips' SHA engine ignores SHA_H writes on CONTINUE, so the cached-
-    // midstate path in sha256_ll_double_hash() silently computes the wrong hash
-    // (the root cause of the zero-shares bug, issues #34/#28/#10/#5). This path
-    // re-hashes block 1 on every call (no midstate caching) but uses only the
-    // legitimate START -> CONTINUE flow, which is correct on every variant.
+    // These chips' SHA_H digest-state registers expect big-endian state words
+    // (espressif/esp-idf#12440), so the cached-midstate path in
+    // sha256_ll_double_hash() -- which seeds them little-endian -- silently
+    // computes the wrong hash (the root cause of the zero-shares bug, issues
+    // #34/#28/#10/#5). This path re-hashes block 1 on every call (no midstate
+    // caching) using only the legitimate START -> CONTINUE flow, which makes no
+    // assumption about seeded-state byte order and is correct on every variant.
     uint32_t *reg = (uint32_t *)(SHA_TEXT_BASE);
     uint32_t *hdr_words = (uint32_t *)header;
 

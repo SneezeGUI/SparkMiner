@@ -893,6 +893,47 @@ void miner_task_core1(void *param) {
 #else
 // Fallback for ESP32-C3/S2: Use sequential HAL-based mining with Midstate Optimization
 
+// One-shot boot check for the raw-register HW path below: run a fixed header
+// + nonce through sha256_ll_double_hash_full and byte-compare against the
+// software reference (the pool-proven path). On untested silicon a wrong
+// register sequence would otherwise fail silently -- fast hashrate counter,
+// zero shares, no logs (#34) -- so main.cpp runs this before spawning the
+// miner and falls back to the software task on mismatch.
+// Vector: all-zero 80-byte header, nonce 0x0000C4E6. Its true double-SHA256
+// starts with 0x000025EE, so both 16-bit early-reject gates pass and the
+// full digests are actually written out for comparison.
+bool miner_c3s2_hw_sha_selftest(void) {
+    block_header_t hb = {};
+    hb.nonce = 0x0000C4E6;
+
+    uint32_t header_swapped[20];
+    uint32_t *header_words = (uint32_t *)&hb;
+    for (int i = 0; i < 20; i++) {
+        header_swapped[i] = __builtin_bswap32(header_words[i]);
+    }
+
+    sha256_hash_t sw_midstate, swHash, hwHash;
+    miner_sha256_midstate(&sw_midstate, &hb);
+    bool swOk = miner_sha256_header(&sw_midstate, &swHash, &hb);
+
+    sha256_ll_acquire();
+    bool hwOk = sha256_ll_double_hash_full((const uint8_t *)header_swapped, hb.nonce, hwHash.bytes);
+    sha256_ll_release();
+
+    bool pass = swOk && hwOk && (memcmp(swHash.bytes, hwHash.bytes, sizeof(sha256_hash_t)) == 0);
+    if (pass) {
+        Serial.println("[SHA-SELFTEST] HW full double-hash PASS - using hardware SHA miner");
+    } else {
+        Serial.println("[SHA-SELFTEST] HW full double-hash FAIL - falling back to software miner");
+        Serial.printf("[SHA-SELFTEST] swOk=%d hwOk=%d\n", swOk, hwOk);
+        Serial.printf("[SHA-SELFTEST] SW hash[28-31]=%02x%02x%02x%02x\n",
+                      swHash.bytes[28], swHash.bytes[29], swHash.bytes[30], swHash.bytes[31]);
+        Serial.printf("[SHA-SELFTEST] HW hash[28-31]=%02x%02x%02x%02x (000025ee on PASS)\n",
+                      hwHash.bytes[28], hwHash.bytes[29], hwHash.bytes[30], hwHash.bytes[31]);
+    }
+    return pass;
+}
+
 void miner_task_core1(void *param) {
     block_header_t hb;          // unswapped header (nonce source + software verify)
     sha256_hash_t hwHash;       // hardware double-SHA result
@@ -943,7 +984,8 @@ void miner_task_core1(void *param) {
         uint32_t yieldCounter = 0;
         while (s_miningActive) {
             // Full hardware double-SHA256. Re-hashes block 1 every nonce (no midstate
-            // restore -- that is unsupported on S2/S3/C3, issue #34) but is correct.
+            // restore -- seeded SHA_H state must be big-endian here, see #34 and
+            // espressif/esp-idf#12440 -- and re-hashing block 1 avoids it entirely).
             if (sha256_ll_double_hash_full(header_bytes, hb.nonce, hwHash.bytes)) {
                 // The raw-register HW path is not yet hardware-verified on these chips,
                 // so re-hash in software (the proven BitsyMiner path) before submitting.
