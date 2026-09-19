@@ -230,6 +230,9 @@ void oled_display_init(uint8_t rotation, uint8_t brightness) {
     digitalWrite(OLED_RST_PIN, HIGH);
     delay(20);
 
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW); // Off by default
+
     Serial.println("HELTEC: Starting I2C (17,18)");
 #endif
     Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
@@ -251,9 +254,6 @@ void oled_display_init(uint8_t rotation, uint8_t brightness) {
 
     // Show boot screen
     oled_display_show_boot();
-
-    pinMode(LED_PIN, OUTPUT);
-    digitalWrite(LED_PIN, LOW); // Off by default
 
     Serial.println("[OLED] Display initialized");
 }
