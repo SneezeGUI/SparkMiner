@@ -404,6 +404,10 @@ void setup() {
     Serial.println("[INIT] Starting WiFi...");
     wifi_manager_start();
 
+    // Issue #31: backstop the explicit-credential reconnect in stratum_task by
+    // letting the SDK auto-retry association whenever the link drops.
+    WiFi.setAutoReconnect(true);
+
     // Register WiFi event handlers for diagnostics
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
         Serial.printf("[WIFI] Disconnected, reason: %d\n", info.wifi_sta_disconnected.reason);
