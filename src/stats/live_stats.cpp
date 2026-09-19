@@ -705,37 +705,24 @@ static void updatePrice() {
 }
 
 static void updateBlockHeight() {
-    // HTTP API - always works
-    WiFiClient client;
-    client.setTimeout(5000);
-
-    HTTPClient http;
-    http.setUserAgent("SparkMiner/1.0");
-    http.setTimeout(5000);
-
-    if (http.begin(client, API_BLOCK_HEIGHT)) {
-        int httpCode = http.GET();
-
-        if (httpCode == HTTP_CODE_OK) {
-            String payload = http.getString();
-            uint32_t height = payload.toInt();
-
-            if (height > 0) {
-                xSemaphoreTake(s_statsMutex, portMAX_DELAY);
-                s_stats.blockHeight = height;
-                s_stats.blockTimestamp = millis();
-                s_stats.blockValid = true;
-                xSemaphoreGive(s_statsMutex);
-            }
+    // The endpoint returns a bare number, which is a valid JSON document,
+    // so it can ride the shared fetchJson path (proxy or direct HTTPS)
+    s_jsonDoc.clear();
+    if (fetchJson(API_BLOCK_HEIGHT, s_jsonDoc)) {
+        uint32_t height = s_jsonDoc.as<uint32_t>();
+        if (height > 0) {
+            xSemaphoreTake(s_statsMutex, portMAX_DELAY);
+            s_stats.blockHeight = height;
+            s_stats.blockTimestamp = millis();
+            s_stats.blockValid = true;
+            xSemaphoreGive(s_statsMutex);
         }
-        http.end();
     }
 }
 
 static void updateFees() {
-    // HTTP API - always works
     s_jsonDoc.clear();
-    if (fetchHttp(API_FEES, s_jsonDoc)) {
+    if (fetchJson(API_FEES, s_jsonDoc)) {
         xSemaphoreTake(s_statsMutex, portMAX_DELAY);
         s_stats.fastestFee = s_jsonDoc["fastestFee"];
         s_stats.halfHourFee = s_jsonDoc["halfHourFee"];
@@ -779,9 +766,10 @@ static void updatePoolStats() {
 }
 
 static void updateNetworkHashrate() {
-    // Only fetch if HTTPS is available (proxy or direct)
-    if (!s_proxyConfigured && !s_httpsEnabled) return;
-    if (s_proxyConfigured && !s_proxyHealthy) return;
+    // This fetch is proxy-only: the raw socket below connects to the proxy
+    // host. Without a proxy it attempted a connect to an empty hostname
+    // ("[E] hostByName(): DNS Failed for" log spam) - bail out instead.
+    if (!s_proxyConfigured || !s_proxyHealthy) return;
 
     // The hashrate API returns ~400KB response with historical data.
     // We use a filter to extract only the fields we need, ignoring the "hashrates" array.

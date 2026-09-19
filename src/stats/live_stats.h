@@ -23,11 +23,14 @@
 // API URLs
 // ============================================================
 
-// HTTP APIs (always used - no SSL overhead)
-#define API_BLOCK_HEIGHT    "http://mempool.space/api/blocks/tip/height"
+// NOTE: mempool.space 301-redirects HTTP to HTTPS and HTTPClient does not
+// follow it, so the plain-HTTP block-height and fee fetches have always
+// failed silently. Route them through the HTTPS path (proxy or direct)
+// like the other mempool endpoints.
+#define API_BLOCK_HEIGHT    "https://mempool.space/api/blocks/tip/height"
 #define API_HASHRATE        "https://mempool.space/api/v1/mining/hashrate/1d"
 #define API_DIFFICULTY      "https://mempool.space/api/v1/difficulty-adjustment"
-#define API_FEES            "http://mempool.space/api/v1/fees/recommended"
+#define API_FEES            "https://mempool.space/api/v1/fees/recommended"
 
 // HTTPS APIs (only used if proxy configured OR enableHttpsStats=true)
 #define API_BTC_PRICE       "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
