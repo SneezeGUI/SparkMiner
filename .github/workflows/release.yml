@@ -1,0 +1,70 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: build ${{ matrix.env }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every shipped target. post_build_merge.py writes
+        # firmware/<git-describe>/<friendly>_factory.bin and _firmware.bin.
+        env: [esp32-2432s028, esp32-2432s028-st7789, esp32-2432s028-2usb,
+              esp32-s3-2432s028, esp32-s3-devkit, esp32-s3-mini,
+              lilygo-t-display-s3, lilygo-t-display-v1,
+              esp32-headless, esp32-headless-led,
+              esp32-c3-supermini, esp32-c3-oled,
+              esp32-s3-oled, wemos-lolin32-oled, esp32-devkit-oled,
+              wireless-paper, wireless-paper-headless]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # git describe drives the firmware/<version>/ output dir
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build ${{ matrix.env }}
+        run: pio run -e ${{ matrix.env }}
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.env }}
+          path: firmware/**/*.bin
+          if-no-files-found: error
+
+  release:
+    needs: build-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create release with binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s globstar
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --prerelease \
+            --generate-notes \
+            artifacts/**/*.bin

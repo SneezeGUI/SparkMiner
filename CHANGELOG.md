@@ -2,6 +2,22 @@
 
 All notable changes to SparkMiner will be documented in this file.
 
+## [v2.9.6-pre] - 2026-09-19
+
+### Fixed
+- **ESP32-S3 zero-shares bug** (#36, issues #28/#10/#5): core 1 now mines the first SHA in software (same proven path as core 0) instead of the broken hardware midstate restore. Root cause: the S3 SHA_H digest-state registers expect big-endian state words (espressif/esp-idf#12440) and the old code seeded little-endian — reported hashrate was real hash speed but no share ever validated. S3 now shows an honest ~50-55 KH/s with shares landing at the pool; a faster correct HW path is tracked in #28.
+- **WiFi reconnect after AP reboot / AUTH_EXPIRE** (#37, issues #31/#29): the watchdog re-issues `WiFi.begin()` with the NVS-stored credentials instead of `WiFi.reconnect()`. README note for the macOS captive-portal probe.
+- **Config portal: SSIDs with spaces** (#45): scan-list autofill read the HTML-escaped visible text (spaces became U+00A0); now reads `data-ssid`.
+- **Block-height and fee stats silently dead** (#44): mempool.space 301-redirects its HTTP endpoints to HTTPS and HTTPClient does not follow redirects; endpoints now use HTTPS via the existing TLS paths.
+
+### Added
+- **ESP32-C3/S2 hardware SHA mining path** (#39, issue #34): legitimate START→CONTINUE full double-hash with no midstate injection, software-verify gate on every submission, and a one-shot boot self-test that falls back to the software miner if the register sequence disagrees with the chip.
+- **`esp32-devkit-oled` board target** (#38, issue #26): generic ESP32 DevKit + SSD1306 128x64 OLED on SDA=21/SCL=22. Both OLED envs added to the CI matrix.
+- **CI artifact upload** — every PR now publishes test-build factory binaries; tags build all targets and publish a GitHub Release automatically.
+
+### Changed
+- README hashrate tables now report honest, pool-verified numbers.
+
 ## [v2.9.3] - 2026-01-22
 
 ### Added
