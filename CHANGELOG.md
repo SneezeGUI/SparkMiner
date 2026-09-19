@@ -1,3 +1,8 @@
+## [Unreleased]
+
+### Added
+- **Heltec WiFi LoRa 32 V3 support** - ESP32-S3 with 128x64 OLED, LoRa SX1262
+
 # Changelog
 
 All notable changes to SparkMiner will be documented in this file.
