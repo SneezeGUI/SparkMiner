@@ -14,6 +14,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <base64.h>
+#include <esp_task_wdt.h>
 #include "live_stats.h"
 #include "board_config.h"
 #include "../config/nvs_config.h"
@@ -412,36 +413,48 @@ static bool fetchViaProxy(const char *targetUrl, JsonDocument &doc) {
 }
 
 /**
- * Fetch URL directly via HTTPS (CPU intensive, may cause issues)
+ * Fetch URL directly via HTTPS (CPU intensive)
+ *
+ * The TLS handshake + read can occupy core 0 for tens of seconds
+ * (software SHA once the miner owns the hardware engines), starving the
+ * idle task and tripping the task watchdog. Unsubscribe core 0's idle
+ * task from the WDT for the duration of the fetch; mining on core 1
+ * stays watchdog-protected throughout.
  */
 static bool fetchHttpsDirect(const char *url, JsonDocument &doc) {
-    WiFiClientSecure secureClient;
-    secureClient.setInsecure();
-    secureClient.setTimeout(5000);
+    TaskHandle_t idle0 = xTaskGetIdleTaskHandleForCPU(0);
+    if (idle0) esp_task_wdt_delete(idle0);
 
-    HTTPClient http;
-    http.setUserAgent("SparkMiner/1.0 ESP32");
-    http.setTimeout(5000);
+    bool ok = false;
+    {
+        WiFiClientSecure secureClient;
+        secureClient.setInsecure();
+        secureClient.setTimeout(5000);
 
-    vTaskDelay(1);  // Yield before SSL handshake
+        HTTPClient http;
+        http.setUserAgent("SparkMiner/1.0 ESP32");
+        http.setTimeout(5000);
 
-    if (!http.begin(secureClient, url)) {
-        logError("HTTPS connect", -1);
-        return false;
+        vTaskDelay(1);  // Yield before SSL handshake
+
+        if (http.begin(secureClient, url)) {
+            int httpCode = http.GET();
+            if (httpCode == HTTP_CODE_OK) {
+                String payload = http.getString();
+                http.end();
+                DeserializationError err = deserializeJson(doc, payload);
+                ok = !err;
+            } else {
+                logError("HTTPS request", httpCode);
+                http.end();
+            }
+        } else {
+            logError("HTTPS connect", -1);
+        }
     }
 
-    int httpCode = http.GET();
-
-    if (httpCode == HTTP_CODE_OK) {
-        String payload = http.getString();
-        http.end();
-        DeserializationError err = deserializeJson(doc, payload);
-        return !err;
-    }
-
-    logError("HTTPS request", httpCode);
-    http.end();
-    return false;
+    if (idle0) esp_task_wdt_add(idle0);
+    return ok;
 }
 
 /**
