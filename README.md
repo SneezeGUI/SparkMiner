@@ -394,6 +394,7 @@ If you don't need live stats and want maximum stability:
 | Pool | URL | Port | Fee | Notes |
 |------|-----|------|-----|-------|
 | **Public Pool** | `public-pool.io` | `21496` | 0% | Recommended, solo mining |
+| **BTC PoW Lab** | `stratum.btcpowlab-pool.com` | `3333` | 5% operator allocation | Hybrid Solo, Vardiff down to difficulty 1 |
 | **FindMyBlock EU** | `eu.findmyblock.xyz` | `3335` | 0% | Solo mining, EU server |
 | **SoloLuck** | `stratum.sololuck.io` | `3335` | 0% | Solo mining, minimum difficulty 1 |
 | **CKPool Solo** | `solo.ckpool.org` | `3333` | 0.5% | Solo mining |
