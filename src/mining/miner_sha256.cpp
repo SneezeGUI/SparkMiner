@@ -11,7 +11,7 @@
 #include <string.h>
 #include "miner_sha256.h"
 
-#define BYTESWAP32(z) ((uint32_t)((z&0xFF)<<24|((z>>8)&0xFF)<<16|((z>>16)&0xFF)<<8|((z>>24)&0xFF)))
+#define BYTESWAP32(z) __builtin_bswap32(z)
 
 #define RROT(v, s) ((v)>>(s) | (v)<<(32-(s)))
 #define R1_a(i) (w[i] = w[i-16] + (RROT(w[i-15],7) ^ (RROT(w[i-15],18) ^ (w[i-15] >> 3))) + ((RROT(w[i-2],17) ^ RROT(w[i-2],19) ^ (w[i-2] >> 10))))
@@ -376,26 +376,14 @@ bool miner_sha256_header(sha256_hash_t *midpoint, sha256_hash_t *ctx, block_head
     CM(1, 2, 3, 4, 5, 6, 7, 0, 63);
 
     // First hash complete - byte-swap for second hash input
-    tmp.hash[0] = BYTESWAP32(WA[0] + midpoint->hash[0]);
-    tmp.hash[1] = BYTESWAP32(WA[1] + midpoint->hash[1]);
-    tmp.hash[2] = BYTESWAP32(WA[2] + midpoint->hash[2]);
-    tmp.hash[3] = BYTESWAP32(WA[3] + midpoint->hash[3]);
-    tmp.hash[4] = BYTESWAP32(WA[4] + midpoint->hash[4]);
-    tmp.hash[5] = BYTESWAP32(WA[5] + midpoint->hash[5]);
-    tmp.hash[6] = BYTESWAP32(WA[6] + midpoint->hash[6]);
-    tmp.hash[7] = BYTESWAP32(WA[7] + midpoint->hash[7]);
-
-    // Copy first hash into working area for double hash
-    data = (uint8_t *)tmp.hash;
-
-    w[0] = GET_DATA(data, 0);
-    w[1] = GET_DATA(data, 4);
-    w[2] = GET_DATA(data, 8);
-    w[3] = GET_DATA(data, 12);
-    w[4] = GET_DATA(data, 16);
-    w[5] = GET_DATA(data, 20);
-    w[6] = GET_DATA(data, 24);
-    w[7] = GET_DATA(data, 28);
+    w[0] = WA[0] + midpoint->hash[0];
+    w[1] = WA[1] + midpoint->hash[1];
+    w[2] = WA[2] + midpoint->hash[2];
+    w[3] = WA[3] + midpoint->hash[3];
+    w[4] = WA[4] + midpoint->hash[4];
+    w[5] = WA[5] + midpoint->hash[5];
+    w[6] = WA[6] + midpoint->hash[6];
+    w[7] = WA[7] + midpoint->hash[7];
 
     w[8] = 0x80000000;
     w[9] = w[10] = w[11] = w[12] = w[13] = w[14] = 0;

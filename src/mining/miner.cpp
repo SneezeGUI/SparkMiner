@@ -264,16 +264,21 @@ static void createCoinbaseHash(uint8_t *hash, const stratum_job_t *job) {
 // Difficulty Calculation
 // ============================================================
 
-static double getDifficulty(sha256_hash_t *ctx) {
-    static const double maxTarget = 26959535291011309493156476344723991336010898738574164086137773096960.0;
-    double hashValue = 0.0;
-    for (int i = 0, j = 31; i < 32; i++, j--) {
-        hashValue = hashValue * 256 + ctx->bytes[j];
+static float getDifficulty(sha256_hash_t *ctx){
+    static const float maxTarget = ((float) 0xFFFF0000UL) ;
+
+    int j=7;  
+    for (; j >= 3; j--) if(ctx->hash[j] != 0) break ;
+
+    float hashValue = ((float) (ctx->hash[j--])) +
+                      ((float) (ctx->hash[j--])) / (float) 0x100000000;
+    float mantissa = maxTarget / hashValue;
+    int exp = (4 - j) * 32;        
+    if (isnan(mantissa) || isinf(mantissa)) {
+        mantissa = 0.0;
     }
-    double difficulty = maxTarget / hashValue;
-    if (isnan(difficulty) || isinf(difficulty)) {
-        difficulty = 0.0;
-    }
+    float difficulty = __builtin_ldexpf(mantissa, exp) ;
+
     return difficulty;
 }
 

@@ -177,6 +177,10 @@ void display_show_reset_complete() {
     Serial.println("[RESET] Factory reset complete, restarting...");
 }
 
+void display_dump_bitmap(void) {
+    Serial.println("[DISPLAY] Dump bitmap unsupported in headless mode");
+}
+
 void display_set_backlight_off() {}
 void display_set_backlight_on() {}
 bool display_is_backlight_off() { return false; }

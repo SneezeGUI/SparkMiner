@@ -396,42 +396,42 @@
     // Defined in platformio.ini via -D USE_HARDWARE_SHA=1
 
 // ============================================================
-// Generic ESP32 DevKit / WROOM with SSD1306 OLED (Issue #26)
-// Standard ESP32 I2C pins; classic Xtensa pipelined SHA (~715 KH/s)
+// M5StickC Plus2 - 135x240 ST7789 (SPI)
+// ESP32-PICO-V3-02 (classic ESP32/Xtensa LX6) with built-in
+// display and two side buttons
 // ============================================================
-#elif defined(ESP32_DEVKIT_OLED)
-    #define BOARD_NAME "ESP32-DevKit-OLED"
+#elif defined(M5STICKC_PLUS2)
+    #define BOARD_NAME "M5StickC-Plus2"
 
-    // Use OLED display (not TFT)
-    #define USE_DISPLAY 0
-    #define USE_OLED_DISPLAY 1
+    #ifndef USE_DISPLAY
+        #define USE_DISPLAY 1
+    #endif
+    #define DISPLAY_TYPE_TFT 1
 
-    // OLED configuration (128x64 SSD1306 I2C, standard ESP32 I2C pins).
-    // Guarded so platformio.ini build flags can override per-board wiring.
-    #ifndef OLED_WIDTH
-        #define OLED_WIDTH 128
+    #ifdef TFT_WIDTH
+        #undef TFT_WIDTH
     #endif
-    #ifndef OLED_HEIGHT
-        #define OLED_HEIGHT 64
+    #define TFT_WIDTH 135
+    #ifdef TFT_HEIGHT
+        #undef TFT_HEIGHT
     #endif
-    #ifndef OLED_SDA_PIN
-        #define OLED_SDA_PIN 21
-    #endif
-    #ifndef OLED_SCL_PIN
-        #define OLED_SCL_PIN 22
-    #endif
-    #ifndef OLED_I2C_ADDR
-        #define OLED_I2C_ADDR 0x3C
-    #endif
+    #define TFT_HEIGHT 240
 
+    // Main button used by OneButton (Button A -> BUTTON_PIN)
     #ifndef BUTTON_PIN
-        #define BUTTON_PIN 0
+        #define BUTTON_PIN 37
     #endif
     #define BUTTON_ACTIVE_LOW 1
 
-    // SHA Implementation: classic ESP32 pipelined Xtensa ASM auto-selected via
-    // CONFIG_IDF_TARGET_ESP32 (USE_HARDWARE_SHA in platformio.ini is cosmetic here)
+    // Power hold pin: the Plus2 has no PMIC (AXP192 removed vs. the original
+    // Plus). GPIO4 must be driven HIGH early at boot to latch the power rail
+    // on; without it the board can brown out / stay unstable once the wake
+    // pulse ends, which is consistent with the TFT_eSPI init hang seen here.
+    #define POWER_HOLD_PIN 4
 
+    // SHA Implementation: classic ESP32 (Xtensa LX6) pipelined ASM path,
+    // selected automatically via CONFIG_IDF_TARGET_ESP32 in miner.cpp.
+    // USE_HARDWARE_SHA is defined in platformio.ini only for the boot log.
 
 // ============================================================
 // Default - Generic ESP32
@@ -496,7 +496,7 @@
 // Network Configuration
 // ============================================================
 #define AP_SSID_PREFIX      "SparkMiner_"
-#define AP_PASSWORD         "minebitcoin"
+#define AP_PASSWORD         "SparkMiner2024!"
 
 #define WIFI_RECONNECT_MS   10000
 #define NTP_UPDATE_MS       600000  // 10 minutes

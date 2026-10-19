@@ -13,10 +13,35 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <base64.h>
 #include "live_stats.h"
 #include "board_config.h"
 #include "../config/nvs_config.h"
+#include <stdint.h>
+#include <string.h>
+
+static size_t base64Encode(const uint8_t *input, size_t inputLen, char *output, size_t outputSize) {
+    static const char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    if (!input || !output || outputSize == 0) return 0;
+
+    size_t needed = ((inputLen + 2) / 3) * 4 + 1;
+    if (outputSize < needed) return 0;
+
+    size_t outIndex = 0;
+    for (size_t i = 0; i < inputLen; i += 3) {
+        uint32_t value = 0;
+        int remaining = inputLen - i;
+        value |= ((uint32_t)input[i]) << 16;
+        if (remaining > 1) value |= ((uint32_t)input[i + 1]) << 8;
+        if (remaining > 2) value |= ((uint32_t)input[i + 2]);
+
+        output[outIndex++] = table[(value >> 18) & 0x3F];
+        output[outIndex++] = table[(value >> 12) & 0x3F];
+        output[outIndex++] = (remaining > 1) ? table[(value >> 6) & 0x3F] : '=';
+        output[outIndex++] = (remaining > 2) ? table[value & 0x3F] : '=';
+    }
+    output[outIndex] = '\0';
+    return outIndex;
+}
 
 // ============================================================
 // Globals
@@ -88,10 +113,7 @@ static bool parseProxyUrl(const char *url) {
             authPart[authLen] = '\0';
 
             // Base64 encode for Proxy-Authorization header
-            String encoded = base64::encode((uint8_t*)authPart, strlen(authPart));
-            strncpy(s_proxyAuth, encoded.c_str(), sizeof(s_proxyAuth) - 1);
-            s_proxyAuth[sizeof(s_proxyAuth) - 1] = '\0';
-
+            base64Encode((const uint8_t*)authPart, strlen(authPart), s_proxyAuth, sizeof(s_proxyAuth));
             hostStart = atSign + 1;
         }
 
@@ -152,9 +174,7 @@ static bool parseProxyUrl(const char *url) {
             // Build auth string "user:pass" and base64 encode
             char authPart[96];
             snprintf(authPart, sizeof(authPart), "%s:%s", user, pass);
-            String encoded = base64::encode((uint8_t*)authPart, strlen(authPart));
-            strncpy(s_proxyAuth, encoded.c_str(), sizeof(s_proxyAuth) - 1);
-            s_proxyAuth[sizeof(s_proxyAuth) - 1] = '\0';
+            base64Encode((const uint8_t*)authPart, strlen(authPart), s_proxyAuth, sizeof(s_proxyAuth));
         }
     }
 
@@ -187,12 +207,14 @@ static void logError(const char *context, int code) {
 }
 
 /**
- * Extract hostname from URL (e.g., "https://api.coingecko.com/path" -> "api.coingecko.com")
+ * Extract hostname from URL into provided buffer (safe, no heap alloc).
+ * Example: "https://api.coingecko.com/path" -> out="api.coingecko.com"
  */
-static String extractHostFromUrl(const char *url) {
+static void extractHostFromUrl(const char *url, char *out, size_t outlen) {
+    out[0] = '\0';
+    if (!url || !out || outlen == 0) return;
     const char *start = strstr(url, "://");
-    if (!start) return "";
-    start += 3;  // Skip "://"
+    if (!start) start = url; else start += 3;  // Skip scheme if present
 
     const char *end = strchr(start, '/');
     if (!end) end = start + strlen(start);
@@ -201,21 +223,35 @@ static String extractHostFromUrl(const char *url) {
     const char *colon = strchr(start, ':');
     if (colon && colon < end) end = colon;
 
-    return String(start).substring(0, end - start);
+    size_t len = (size_t)(end - start);
+    if (len >= outlen) len = outlen - 1;
+    memcpy(out, start, len);
+    out[len] = '\0';
 }
 
 /**
- * Extract path from URL (e.g., "https://api.coingecko.com/api/v3/..." -> "/api/v3/...")
+ * Extract path from URL into provided buffer (safe, no heap alloc).
+ * Example: "https://api.coingecko.com/api/v3/..." -> out="/api/v3/..."
  */
-static String extractPathFromUrl(const char *url) {
+static void extractPathFromUrl(const char *url, char *out, size_t outlen) {
+    out[0] = '\0';
+    if (!url || !out || outlen == 0) return;
     const char *start = strstr(url, "://");
-    if (!start) return "/";
-    start += 3;  // Skip "://"
+    if (!start) start = url; else start += 3;
 
     const char *path = strchr(start, '/');
-    if (!path) return "/";
+    if (!path) {
+        // Root path
+        if (outlen > 1) {
+            out[0] = '/'; out[1] = '\0';
+        }
+        return;
+    }
 
-    return String(path);
+    size_t len = strlen(path);
+    if (len >= outlen) len = outlen - 1;
+    memcpy(out, path, len);
+    out[len] = '\0';
 }
 
 // Proxy method preference: 0=auto, 1=GET (SSL bump), 2=CONNECT (tunnel)
@@ -234,27 +270,26 @@ static bool fetchViaProxyGet(const char *targetUrl, JsonDocument &doc) {
         return false;
     }
 
-    String targetHost = extractHostFromUrl(targetUrl);
+    char targetHost[64];
+    extractHostFromUrl(targetUrl, targetHost, sizeof(targetHost));
 
-    // Build HTTP request - full URL in request line for SSL bumping proxy
-    String request = "GET ";
-    request += targetUrl;
-    request += " HTTP/1.1\r\n";
-    request += "Host: ";
-    request += targetHost;
-    request += "\r\n";
+    // Build HTTP request - send directly to client to avoid large String allocations
+    client.print("GET ");
+    client.print(targetUrl);
+    client.print(" HTTP/1.1\r\n");
+    client.print("Host: ");
+    client.print(targetHost);
+    client.print("\r\n");
 
     if (s_proxyAuth[0]) {
-        request += "Proxy-Authorization: Basic ";
-        request += s_proxyAuth;
-        request += "\r\n";
+        client.print("Proxy-Authorization: Basic ");
+        client.print(s_proxyAuth);
+        client.print("\r\n");
     }
 
-    request += "User-Agent: SparkMiner/1.0 ESP32\r\n";
-    request += "Accept: application/json\r\n";
-    request += "Connection: close\r\n\r\n";
-
-    client.print(request);
+    client.print("User-Agent: SparkMiner/1.0 ESP32\r\n");
+    client.print("Accept: application/json\r\n");
+    client.print("Connection: close\r\n\r\n");
 
     // Wait for response
     uint32_t timeout = millis() + 8000;
@@ -268,14 +303,23 @@ static bool fetchViaProxyGet(const char *targetUrl, JsonDocument &doc) {
     }
 
     // Read status line
-    String statusLine = client.readStringUntil('\n');
-    statusLine.trim();
+    char statusLine[128];
+    int statusLen = client.readBytesUntil('\n', statusLine, sizeof(statusLine) - 1);
+    if (statusLen <= 0) {
+        client.stop();
+        return false;
+    }
+    statusLine[statusLen] = '\0';
+    char *statusTrim = statusLine;
+    while (*statusTrim == ' ' || *statusTrim == '\r' || *statusTrim == '\n' || *statusTrim == '\t') {
+        statusTrim++;
+    }
 
     int statusCode = 0;
-    if (statusLine.startsWith("HTTP/")) {
-        int spaceIdx = statusLine.indexOf(' ');
-        if (spaceIdx > 0) {
-            statusCode = statusLine.substring(spaceIdx + 1).toInt();
+    if (strncmp(statusTrim, "HTTP/", 5) == 0) {
+        char *spacePtr = strchr(statusTrim, ' ');
+        if (spacePtr) {
+            statusCode = atoi(spacePtr + 1);
         }
     }
 
@@ -293,58 +337,71 @@ static bool fetchViaProxyGet(const char *targetUrl, JsonDocument &doc) {
             vTaskDelay(10 / portTICK_PERIOD_MS);
             continue;
         }
-        String line = client.readStringUntil('\n');
-        line.trim();
-        if (line.startsWith("Content-Length:")) {
-            contentLength = line.substring(15).toInt();
+        char header[128];
+        int headerLen = client.readBytesUntil('\n', header, sizeof(header) - 1);
+        if (headerLen <= 0) break;
+        header[headerLen] = '\0';
+        char *line = header;
+        while (*line == ' ' || *line == '\r' || *line == '\n' || *line == '\t') line++;
+        if (line[0] == '\0') break;
+        if (strncasecmp(line, "Content-Length:", 15) == 0) {
+            contentLength = atoi(line + 15);
         }
-        if (line.indexOf("chunked") >= 0) {
+        if (strcasestr(line, "chunked")) {
             chunked = true;
         }
-        if (line.length() == 0) break;
     }
 
     // Read body with size limit to prevent OOM
     const int MAX_BODY = 4096;
-    String body;
-    body.reserve(MAX_BODY);
-
-    // Read body - continue while connected OR data available in buffer
+    static char body[MAX_BODY + 1];
+    int bodyLen = 0;
     uint32_t readTimeout = millis() + 5000;
-    while ((client.connected() || client.available()) && (int)body.length() < MAX_BODY && millis() < readTimeout) {
+    while ((client.connected() || client.available()) && bodyLen < MAX_BODY && millis() < readTimeout) {
         if (client.available()) {
-            char c = client.read();
-            body += c;
+            int c = client.read();
+            if (c < 0) break;
+            body[bodyLen++] = (char)c;
         } else {
             vTaskDelay(1);
         }
     }
     client.stop();
+    body[bodyLen] = '\0';
 
     // Handle chunked transfer encoding
-    if (chunked && body.length() > 0) {
-        String decoded;
-        decoded.reserve(body.length());
+    if (chunked && bodyLen > 0) {
+        static char decoded[MAX_BODY + 1];
+        int decodedLen = 0;
         int pos = 0;
-        while (pos < (int)body.length()) {
+        while (pos < bodyLen) {
             // Read chunk size (hex)
-            int lineEnd = body.indexOf('\n', pos);
-            if (lineEnd < 0) break;
-            String sizeLine = body.substring(pos, lineEnd);
-            sizeLine.trim();
-            int chunkSize = strtol(sizeLine.c_str(), NULL, 16);
-            if (chunkSize == 0) break;  // End of chunks
+            int lineEnd = pos;
+            while (lineEnd < bodyLen && body[lineEnd] != '\n') lineEnd++;
+            if (lineEnd >= bodyLen) break;
+            body[lineEnd] = '\0';
+            char *sizeLine = body + pos;
+            while (*sizeLine == ' ' || *sizeLine == '\r' || *sizeLine == '\n' || *sizeLine == '\t') sizeLine++;
+            int chunkSize = (int)strtol(sizeLine, NULL, 16);
+            if (chunkSize <= 0) break;
             pos = lineEnd + 1;
-            // Read chunk data
-            if (pos + chunkSize <= (int)body.length()) {
-                decoded += body.substring(pos, pos + chunkSize);
+            if (pos + chunkSize > bodyLen) break;
+            if (decodedLen + chunkSize > MAX_BODY) break;
+            memcpy(decoded + decodedLen, body + pos, chunkSize);
+            decodedLen += chunkSize;
+            pos += chunkSize;
+            if (pos + 1 < bodyLen && body[pos] == '\r' && body[pos + 1] == '\n') {
+                pos += 2;
+            } else if (pos < bodyLen && body[pos] == '\n') {
+                pos++;
             }
-            pos += chunkSize + 2;  // Skip data + \r\n
         }
-        body = decoded;
+        decoded[decodedLen] = '\0';
+        memcpy(body, decoded, decodedLen + 1);
+        bodyLen = decodedLen;
     }
 
-    if (body.length() == 0) {
+    if (bodyLen == 0) {
         Serial.println("[STATS] Proxy: empty response");
         return false;
     }
@@ -433,10 +490,9 @@ static bool fetchHttpsDirect(const char *url, JsonDocument &doc) {
     int httpCode = http.GET();
 
     if (httpCode == HTTP_CODE_OK) {
-        String payload = http.getString();
+        DeserializationError err = deserializeJson(doc, http.getStream());
         http.end();
-        DeserializationError err = deserializeJson(doc, payload);
-        return !err;
+        return err == DeserializationError::Ok;
     }
 
     logError("HTTPS request", httpCode);
@@ -462,10 +518,9 @@ static bool fetchHttp(const char *url, JsonDocument &doc) {
     int httpCode = http.GET();
 
     if (httpCode == HTTP_CODE_OK) {
-        String payload = http.getString();
+        DeserializationError err = deserializeJson(doc, http.getStream());
         http.end();
-        DeserializationError err = deserializeJson(doc, payload);
-        return !err;
+        return err == DeserializationError::Ok;
     }
 
     http.end();
@@ -705,24 +760,41 @@ static void updatePrice() {
 }
 
 static void updateBlockHeight() {
-    // The endpoint returns a bare number, which is a valid JSON document,
-    // so it can ride the shared fetchJson path (proxy or direct HTTPS)
-    s_jsonDoc.clear();
-    if (fetchJson(API_BLOCK_HEIGHT, s_jsonDoc)) {
-        uint32_t height = s_jsonDoc.as<uint32_t>();
-        if (height > 0) {
-            xSemaphoreTake(s_statsMutex, portMAX_DELAY);
-            s_stats.blockHeight = height;
-            s_stats.blockTimestamp = millis();
-            s_stats.blockValid = true;
-            xSemaphoreGive(s_statsMutex);
+    // HTTP API - always works
+    WiFiClient client;
+    client.setTimeout(5000);
+
+    HTTPClient http;
+    http.setUserAgent("SparkMiner/1.0");
+    http.setTimeout(5000);
+
+    if (http.begin(client, API_BLOCK_HEIGHT)) {
+        int httpCode = http.GET();
+
+        if (httpCode == HTTP_CODE_OK) {
+            char payload[64] = {0};
+            int len = http.getStream().readBytesUntil('\n', payload, sizeof(payload) - 1);
+            if (len > 0) {
+                payload[len] = '\0';
+                uint32_t height = (uint32_t)atoi(payload);
+
+                if (height > 0) {
+                    xSemaphoreTake(s_statsMutex, portMAX_DELAY);
+                    s_stats.blockHeight = height;
+                    s_stats.blockTimestamp = millis();
+                    s_stats.blockValid = true;
+                    xSemaphoreGive(s_statsMutex);
+                }
+            }
         }
+        http.end();
     }
 }
 
 static void updateFees() {
+    // HTTP API - always works
     s_jsonDoc.clear();
-    if (fetchJson(API_FEES, s_jsonDoc)) {
+    if (fetchHttp(API_FEES, s_jsonDoc)) {
         xSemaphoreTake(s_statsMutex, portMAX_DELAY);
         s_stats.fastestFee = s_jsonDoc["fastestFee"];
         s_stats.halfHourFee = s_jsonDoc["halfHourFee"];
@@ -766,10 +838,9 @@ static void updatePoolStats() {
 }
 
 static void updateNetworkHashrate() {
-    // This fetch is proxy-only: the raw socket below connects to the proxy
-    // host. Without a proxy it attempted a connect to an empty hostname
-    // ("[E] hostByName(): DNS Failed for" log spam) - bail out instead.
-    if (!s_proxyConfigured || !s_proxyHealthy) return;
+    // Only fetch if HTTPS is available (proxy or direct)
+    if (!s_proxyConfigured && !s_httpsEnabled) return;
+    if (s_proxyConfigured && !s_proxyHealthy) return;
 
     // The hashrate API returns ~400KB response with historical data.
     // We use a filter to extract only the fields we need, ignoring the "hashrates" array.
@@ -784,21 +855,21 @@ static void updateNetworkHashrate() {
         return;
     }
 
-    String targetHost = extractHostFromUrl(API_HASHRATE);
+    char targetHost[64];
+    extractHostFromUrl(API_HASHRATE, targetHost, sizeof(targetHost));
 
-    // Build request
-    String request = "GET ";
-    request += API_HASHRATE;
-    request += " HTTP/1.1\r\nHost: ";
-    request += targetHost;
-    request += "\r\n";
+    // Build request directly
+    client.print("GET ");
+    client.print(API_HASHRATE);
+    client.print(" HTTP/1.1\r\nHost: ");
+    client.print(targetHost);
+    client.print("\r\n");
     if (s_proxyAuth[0]) {
-        request += "Proxy-Authorization: Basic ";
-        request += s_proxyAuth;
-        request += "\r\n";
+        client.print("Proxy-Authorization: Basic ");
+        client.print(s_proxyAuth);
+        client.print("\r\n");
     }
-    request += "Connection: close\r\n\r\n";
-    client.print(request);
+    client.print("Connection: close\r\n\r\n");
 
     // Wait for response
     uint32_t timeout = millis() + 10000;
@@ -813,9 +884,13 @@ static void updateNetworkHashrate() {
 
     // Skip HTTP headers
     while (client.connected() || client.available()) {
-        String line = client.readStringUntil('\n');
-        line.trim();
-        if (line.length() == 0) break;
+        char line[128];
+        int len = client.readBytesUntil('\n', line, sizeof(line) - 1);
+        if (len <= 0) break;
+        line[len] = '\0';
+        char *trim = line;
+        while (*trim == ' ' || *trim == '\r' || *trim == '\n' || *trim == '\t') trim++;
+        if (*trim == '\0') break;
     }
 
     // Parse JSON with filter (ignores hashrates array, saves memory)

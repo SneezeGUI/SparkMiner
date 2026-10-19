@@ -501,4 +501,8 @@ void display_set_backlight_off() {}
 void display_set_backlight_on() {}
 bool display_is_backlight_off() { return false; }
 
+void display_dump_bitmap(void) {
+    Serial.println("[DISPLAY] Dump bitmap unsupported on OLED display");
+}
+
 #endif // USE_OLED_DISPLAY

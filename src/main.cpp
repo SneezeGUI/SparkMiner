@@ -16,16 +16,6 @@
 #include <OneButton.h>
 #include <soc/soc_caps.h>  // For SOC_CPU_CORES_NUM
 
-// For CPU overclocking
-#if defined(CONFIG_IDF_TARGET_ESP32)
-#include <soc/rtc.h>
-#include <soc/rtc_cntl_reg.h>
-#include <esp32/rom/rtc.h>
-extern "C" {
-    #include <esp_private/esp_clk.h>
-}
-#endif
-
 #include <board_config.h>
 #include "mining/miner.h"
 #include "stratum/stratum_types.h"
@@ -44,6 +34,9 @@ TaskHandle_t buttonTask = NULL;
 
 // Global state
 volatile bool systemReady = false;
+
+// Forward declaration for reset task so handlers can create it
+void reset_countdown_task(void *param);
 
 // Button handling (OneButton)
 #if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
@@ -70,8 +63,12 @@ void onButtonDoubleClick() {
     uint8_t newRotation = display_flip_rotation();
     // Save to NVS
     miner_config_t *config = nvs_config_get();
-    config->rotation = newRotation;
-    nvs_config_save(config);
+    if (config) {
+        config->rotation = newRotation;
+        nvs_config_save(config);
+    } else {
+        Serial.println("[BUTTON] Warning: config unavailable, cannot save rotation");
+    }
     Serial.printf("[BUTTON] New rotation saved: %d\n", newRotation);
 }
 
@@ -86,10 +83,14 @@ void onButtonMultiClick() {
     if (clicks == 3) {
         Serial.println("[BUTTON] Triple-click detected - toggling color theme");
         miner_config_t *config = nvs_config_get();
-        config->invertColors = !config->invertColors;
-        display_set_inverted(config->invertColors);
-        nvs_config_save(config);
-        Serial.printf("[BUTTON] Theme switched to %s mode\n", config->invertColors ? "Dark" : "Light");
+        if (config) {
+            config->invertColors = !config->invertColors;
+            display_set_inverted(config->invertColors);
+            nvs_config_save(config);
+            Serial.printf("[BUTTON] Theme switched to %s mode\n", config->invertColors ? "Dark" : "Light");
+        } else {
+            Serial.println("[BUTTON] Warning: config unavailable, cannot toggle theme");
+        }
     }
 }
 
@@ -100,42 +101,16 @@ void onButtonLongPressStart() {
         display_set_backlight_on();
         return;
     }
-    Serial.println("[RESET] Long press detected - starting countdown...");
-
-    // Visual countdown on display
-    for (int i = 3; i > 0; i--) {
-        display_show_reset_countdown(i);
-
-        delay(1000);
-
-        // Check if button released early
-        if (digitalRead(BUTTON_PIN) == HIGH) {
-            Serial.println("[RESET] Cancelled - button released");
-            display_redraw();  // Trigger redraw of normal screen
-            return;
-        }
-    }
-
-    Serial.println("[RESET] *** FACTORY RESET TRIGGERED ***");
-
-    // Show reset message
-    display_show_reset_complete();
-
-    // Clear NVS
-    Preferences prefs;
-    if (prefs.begin("sparkminer", false)) {
-        prefs.clear();
-        prefs.end();
-        Serial.println("[RESET] NVS cleared");
-    }
-
-    // Clear WiFi settings
-    WiFi.disconnect(true, true);
-    Serial.println("[RESET] WiFi settings cleared");
-
-    delay(500);
-    Serial.println("[RESET] Restarting...");
-    ESP.restart();
+    Serial.println("[RESET] Long press detected - scheduling reset countdown task");
+    xTaskCreatePinnedToCore(
+        reset_countdown_task,
+        "ResetCountdown",
+        4096,
+        NULL,
+        8,
+        NULL,
+        0
+    );
 }
 #endif
 
@@ -212,65 +187,8 @@ void setupPowerManagement();
 void setupTasks();
 void printBanner();
 void checkFactoryReset();
-uint32_t tryOverclock();
-
-/**
- * Attempt CPU overclock using 320MHz PLL
- * ESP32 valid PLL configs:
- *   - 480MHz PLL / 2 = 240MHz (standard)
- *   - 320MHz PLL / 1 = 320MHz (overclock, may not be stable)
- *   - 320MHz PLL / 2 = 160MHz
- *
- * Returns the achieved frequency
- */
-uint32_t tryOverclock() {
-#if defined(CONFIG_IDF_TARGET_ESP32)
-    Serial.println("[OVERCLOCK] Attempting 320MHz overclock...");
-    Serial.flush();  // Ensure message is sent before clock change
-
-    uint32_t baseFreq = getCpuFrequencyMhz();
-    Serial.printf("[OVERCLOCK] Base frequency: %u MHz\n", baseFreq);
-    Serial.flush();
-
-    // Configure for 320MHz PLL with divider 1
-    rtc_cpu_freq_config_t conf;
-    conf.source = RTC_CPU_FREQ_SRC_PLL;
-    conf.source_freq_mhz = 320;  // 320MHz PLL
-    conf.div = 1;                // div=1 = 320MHz output
-    conf.freq_mhz = 320;
-
-    // Apply the configuration
-    rtc_clk_cpu_freq_set_config(&conf);
-
-    // Adjust serial baud rate for new clock (320/240 ratio)
-    // Serial internally uses APB clock which may change
-    delay(10);
-
-    // Quick stability test
-    volatile uint32_t dummy = 0;
-    for (int j = 0; j < 100000; j++) {
-        dummy += j * 17;
-        dummy ^= (dummy >> 3);
-    }
-
-    // Verify the frequency
-    uint32_t actualFreq = getCpuFrequencyMhz();
-
-    if (actualFreq >= 300) {
-        Serial.printf("[OVERCLOCK] SUCCESS at %u MHz!\n", actualFreq);
-        return actualFreq;
-    }
-
-    // Failed, revert to 240MHz
-    setCpuFrequencyMhz(240);
-    Serial.printf("[OVERCLOCK] Failed (got %u MHz), using 240 MHz\n", actualFreq);
-    return 240;
-
-#else
-    Serial.println("[OVERCLOCK] Not supported on this chip variant");
-    return getCpuFrequencyMhz();
-#endif
-}
+void reset_countdown_task(void *param);
+void serial_task(void *param);
 
 /**
  * Check if boot button is held for factory reset
@@ -329,10 +247,108 @@ void checkFactoryReset() {
     #endif
 }
 
+// Simple serial command task: listens for lines and accepts 'DUMP' to print display snapshot
+void serial_task(void *param) {
+    (void)param;
+    Serial.println("[SERIAL] Command task started");
+    String line;
+    for (;;) {
+        while (Serial.available()) {
+            char c = (char)Serial.read();
+            if (c == '\n' || c == '\r') {
+                if (line.length() == 0) continue;
+                String cmd = line;
+                cmd.trim();
+                cmd.toUpperCase();
+                if (cmd == "DUMP") {
+                    display_data_t snap;
+                    monitor_get_display_snapshot(&snap);
+                    // Enhanced dump with timestamp, uptime and heap info
+                    Serial.println("--- DISPLAY DUMP START ---");
+                    Serial.printf("timestamp: %lu\n", millis());
+                    Serial.printf("screen: %u\n", display_get_screen());
+                    Serial.printf("hashrate: %.2f H/s\n", snap.hashRate);
+                    Serial.printf("totalHashes: %llu\n", snap.totalHashes);
+                    Serial.printf("bestDifficulty: %.4f\n", snap.bestDifficulty);
+                    Serial.printf("sharesAccepted: %u\n", snap.sharesAccepted);
+                    Serial.printf("sharesRejected: %u\n", snap.sharesRejected);
+                    Serial.printf("poolConnected: %d\n", snap.poolConnected ? 1 : 0);
+                    if (snap.poolName) Serial.printf("poolName: %s\n", snap.poolName);
+                    Serial.printf("poolWorkersTotal: %d\n", snap.poolWorkersTotal);
+                    Serial.printf("poolHashrate: %s\n", snap.poolHashrate);
+                    Serial.printf("workerHashrate: %s\n", snap.workerHashrate);
+                    Serial.printf("wifiConnected: %d\n", snap.wifiConnected ? 1 : 0);
+                    if (snap.ipAddress) Serial.printf("ip: %s\n", snap.ipAddress);
+                    Serial.printf("btcPrice: %.2f\n", snap.btcPrice);
+                    Serial.printf("blockHeight: %u\n", snap.blockHeight);
+                    Serial.printf("networkHashrate: %s\n", snap.networkHashrate);
+                    Serial.printf("uptimeSeconds: %u\n", snap.uptimeSeconds);
+                    Serial.printf("cpuMhz: %u\n", snap.cpuMhz);
+                    // Heap diagnostics
+                    Serial.printf("freeHeap: %u\n", ESP.getFreeHeap());
+                    Serial.printf("minFreeHeap: %u\n", ESP.getMinFreeHeap());
+                    Serial.printf("maxAllocHeap: %u\n", ESP.getMaxAllocHeap());
+                    Serial.printf("sdkVersion: %s\n", esp_get_idf_version());
+                    Serial.println("--- DISPLAY DUMP END ---");
+                } else if (cmd == "DUMP BITMAP") {
+                    display_dump_bitmap();
+                } else {
+                    Serial.printf("[SERIAL] Unknown command: %s\n", cmd.c_str());
+                }
+                line = "";
+            } else {
+                line += c;
+                if (line.length() > 200) line = ""; // prevent runaway
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+// Dedicated task to handle factory reset countdown and NVS wipe
+void reset_countdown_task(void *param) {
+    (void)param;
+    for (int i = 3; i > 0; i--) {
+        display_show_reset_countdown(i);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        if (digitalRead(BUTTON_PIN) == HIGH) {
+            Serial.println("[RESET] Cancelled - button released");
+            display_redraw();
+            vTaskDelete(NULL);
+            return;
+        }
+    }
+
+    Serial.println("[RESET] *** FACTORY RESET TRIGGERED ***");
+    display_show_reset_complete();
+
+    Preferences prefs;
+    if (prefs.begin("sparkminer", false)) {
+        prefs.clear();
+        prefs.end();
+        Serial.println("[RESET] NVS cleared");
+    }
+
+    WiFi.disconnect(true, true);
+    Serial.println("[RESET] WiFi settings cleared");
+
+    vTaskDelay(pdMS_TO_TICKS(500));
+    Serial.println("[RESET] Restarting...");
+    ESP.restart();
+}
+
 /**
  * Arduino setup - runs once at boot
  */
 void setup() {
+    // Power hold: must be set HIGH as early as possible on boards without
+    // a PMIC (e.g. M5StickC Plus2) or the board can lose power / stay
+    // unstable shortly after the wake pulse ends.
+    #ifdef POWER_HOLD_PIN
+        pinMode(POWER_HOLD_PIN, OUTPUT);
+        digitalWrite(POWER_HOLD_PIN, HIGH);
+    #endif
+
     Serial.begin(115200);
 
     // Wait for USB CDC to be ready (with timeout for headless operation)
@@ -356,7 +372,10 @@ void setup() {
     // Configure watchdog with longer timeout for mining
     // Mining loops will yield periodically via vTaskDelay(1)
     Serial.println("[INIT] Configuring watchdog timer (30s timeout)...");
-    esp_task_wdt_init(30, true);  // 30 second timeout, panic on trigger
+    esp_err_t wdtErr = esp_task_wdt_init(30, true);  // 30 second timeout, panic on trigger
+    if (wdtErr != ESP_OK) {
+        Serial.printf("[WARN] Could not initialize watchdog: %d\n", wdtErr);
+    }
 
     // Disable power management (no CPU throttling/sleep)
     setupPowerManagement();
@@ -377,6 +396,14 @@ void setup() {
 
     // Load pool configuration from NVS
     miner_config_t *config = nvs_config_get();
+    miner_config_t localConfig;
+    if (!config) {
+        // Fallback to defaults if global config unavailable
+        nvs_config_reset(&localConfig);
+        config = &localConfig;
+        Serial.println("[INIT] Warning: NVS config unavailable, using defaults");
+    }
+
     stratum_set_pool(config->poolUrl, config->poolPort, config->wallet, config->poolPassword, config->workerName);
     stratum_set_backup_pool(config->backupPoolUrl, config->backupPoolPort,
                            config->backupWallet, config->backupPoolPassword, config->workerName);
@@ -399,14 +426,21 @@ void setup() {
         Serial.println("[INIT] Button handlers registered (click/double/triple/long-press)");
     #endif
 
+    // Start serial command task to accept debug commands (e.g., 'DUMP')
+    xTaskCreatePinnedToCore(
+        serial_task,
+        "SerialCmd",
+        4096,
+        NULL,
+        2,
+        NULL,
+        1
+    );
+
     // Initialize WiFiManager and connect
     wifi_manager_init();
     Serial.println("[INIT] Starting WiFi...");
     wifi_manager_start();
-
-    // Issue #31: backstop the explicit-credential reconnect in stratum_task by
-    // letting the SDK auto-retry association whenever the link drops.
-    WiFi.setAutoReconnect(true);
 
     // Register WiFi event handlers for diagnostics
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
@@ -566,23 +600,18 @@ void setupTasks() {
 
             Serial.println("[INIT] All tasks created (dual-core mining)");
         #else
-            // Single-core (C3, S2): one miner task, not pinned. Prefer the HW
-            // full double-hash path (sha256_ll_double_hash_full), but gate it on
-            // a boot self-test against the software reference -- untested silicon
-            // must not fail silently with a fast counter and zero shares (#34).
-            // Falls back to the software miner (pre-#39 behavior) on mismatch.
-            bool hwShaOk = miner_c3s2_hw_sha_selftest();
+            // Single-core (C3, S2): Run only one miner task, not pinned
+            // Must yield frequently to let WiFi/Stratum work
             xTaskCreate(
-                hwShaOk ? miner_task_core1 : miner_task_core0,
+                miner_task_core0,
                 "Miner",
-                hwShaOk ? MINER_1_STACK : MINER_0_STACK,
+                MINER_0_STACK,
                 NULL,
                 MINER_0_PRIORITY,
-                hwShaOk ? &miner1Task : &miner0Task
+                &miner0Task
             );
 
-            Serial.printf("[INIT] All tasks created (single-core %s mining)\n",
-                          hwShaOk ? "HW-SHA" : "software");
+            Serial.println("[INIT] All tasks created (single-core mining)");
         #endif
     } else {
         Serial.println("[INIT] Monitor task created (mining disabled - no wallet)");

@@ -67,6 +67,16 @@ flash_freq = "40m"
 needs_boot_mode = false
 group = "CYD (Cheap Yellow Display)"
 
+[boards.m5stickc-plus2]
+name = "M5StickC Plus2"
+env = "m5stickc_plus2"
+chip = "esp32"
+description = "M5Stack M5StickC Plus2, built-in 135x240 ST7789 display"
+monitor_baud = 115200
+flash_baud = 1500000
+needs_boot_mode = false
+group = "M5Stack"
+
 [boards.freenove-s3]
 name = "Freenove ESP32-S3 Display"
 env = "esp32-s3-2432s028"
@@ -128,14 +138,6 @@ chip = "esp32s3"
 description = "Dual-core with 128x64 SSD1306 OLED"
 needs_boot_mode = true
 port_changes_on_reset = true
-group = "OLED Display"
-
-[boards.esp32-devkit-oled]
-name = "ESP32 DevKit OLED"
-env = "esp32-devkit-oled"
-chip = "esp32"
-description = "Generic ESP32/WROOM with 128x64 SSD1306 OLED (SDA=GPIO21, SCL=GPIO22, addr=0x3C)"
-needs_boot_mode = false
 group = "OLED Display"
 
 [boards.wireless-paper]

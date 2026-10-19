@@ -44,6 +44,9 @@ static uint32_t s_sessionStartBlocks = 0;
 // Helper Functions
 // ============================================================
 
+// File-scope snapshot of the last display data for debugging/dump
+static display_data_t s_displaySnapshot;
+
 static void updateDisplayData(display_data_t *data) {
     // Get mining stats (current session)
     mining_stats_t *mstats = miner_get_stats();
@@ -165,6 +168,12 @@ static void updateDisplayData(display_data_t *data) {
     }
 }
 
+void monitor_get_display_snapshot(display_data_t *out) {
+    if (!out) return;
+    // Simple copy - not synchronized but acceptable for debug use
+    memcpy(out, &s_displaySnapshot, sizeof(display_data_t));
+}
+
 // ============================================================
 // Public API
 // ============================================================
@@ -214,8 +223,8 @@ void monitor_task(void *param) {
         monitor_init();
     }
 
-    display_data_t displayData;
-    memset(&displayData, 0, sizeof(displayData));
+    // Use file-scope snapshot so other tasks can request it
+    memset(&s_displaySnapshot, 0, sizeof(s_displaySnapshot));
 
     while (true) {
         uint32_t now = millis();
@@ -228,10 +237,10 @@ void monitor_task(void *param) {
 
         // Update display
         if (now - s_lastDisplayUpdate >= DISPLAY_UPDATE_MS) {
-            updateDisplayData(&displayData);
+            updateDisplayData(&s_displaySnapshot);
 
             #if (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
-                display_update(&displayData);
+                display_update(&s_displaySnapshot);
 
                 // Check for touch input
                 if (display_touched()) {
@@ -257,24 +266,24 @@ void monitor_task(void *param) {
             static uint32_t lastSerialPrint = 0;
             if (now - lastSerialPrint >= 10000) {
                 Serial.printf("[STATS] Hashrate: %.2f H/s | Shares: %u/%u | Ping: %u ms | Best: %.4f\n",
-                    displayData.hashRate,
-                    displayData.sharesAccepted,
-                    displayData.sharesAccepted + displayData.sharesRejected,
-                    displayData.avgLatency,
-                    displayData.bestDifficulty);
+                    s_displaySnapshot.hashRate,
+                    s_displaySnapshot.sharesAccepted,
+                    s_displaySnapshot.sharesAccepted + s_displaySnapshot.sharesRejected,
+                    s_displaySnapshot.avgLatency,
+                    s_displaySnapshot.bestDifficulty);
                 
-                if (displayData.poolName) {
+                if (s_displaySnapshot.poolName) {
                     Serial.printf("[STATS] Pool: %s (%d workers) %s\n", 
-                        displayData.poolName, 
-                        displayData.poolWorkersTotal,
-                        (displayData.poolFailovers > 0) ? "[FAILOVER]" : "");
+                        s_displaySnapshot.poolName, 
+                        s_displaySnapshot.poolWorkersTotal,
+                        (s_displaySnapshot.poolFailovers > 0) ? "[FAILOVER]" : "");
                 }
 
-                if (displayData.btcPrice > 0) {
+                if (s_displaySnapshot.btcPrice > 0) {
                     Serial.printf("[STATS] BTC: $%.0f | Block: %u | Fee: %d sat/vB\n",
-                        displayData.btcPrice,
-                        displayData.blockHeight,
-                        displayData.halfHourFee);
+                        s_displaySnapshot.btcPrice,
+                        s_displaySnapshot.blockHeight,
+                        s_displaySnapshot.halfHourFee);
                 }
 
                 // DEBUG: Per-core hash contribution
@@ -308,16 +317,16 @@ void monitor_task(void *param) {
         #ifdef USE_LED_STATUS
         if (now - s_lastLedUpdate >= LED_UPDATE_MS) {
             // Determine current status based on connection state
-            if (!displayData.wifiConnected) {
+            if (!s_displaySnapshot.wifiConnected) {
                 // Check if in AP mode
                 if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
                     led_status_set(LED_STATUS_AP_MODE);
                 } else {
                     led_status_set(LED_STATUS_CONNECTING);
                 }
-            } else if (!displayData.poolConnected) {
+            } else if (!s_displaySnapshot.poolConnected) {
                 led_status_set(LED_STATUS_CONNECTING);
-            } else if (displayData.hashRate > 0) {
+            } else if (s_displaySnapshot.hashRate > 0) {
                 led_status_set(LED_STATUS_MINING);
             }
 

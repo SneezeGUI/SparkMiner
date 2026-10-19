@@ -153,6 +153,11 @@ void display_handle_touch();
 void display_show_ap_config(const char *ssid, const char *password, const char *ip);
 
 /**
+ * Dump the current frame buffer over serial as RGB rows.
+ */
+void display_dump_bitmap(void);
+
+/**
  * Set display color inversion
  * @param inverted true to invert colors, false for normal
  */
@@ -210,6 +215,7 @@ void display_show_ap_config(const char *ssid, const char *password, const char *
 void display_set_inverted(bool inverted);
 void display_show_reset_countdown(int seconds);
 void display_show_reset_complete();
+void display_dump_bitmap(void);
 void display_set_backlight_off();
 void display_set_backlight_on();
 bool display_is_backlight_off();

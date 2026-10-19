@@ -42,6 +42,7 @@
 static Preferences s_prefs;
 static miner_config_t s_config;
 static bool s_initialized = false;
+static SemaphoreHandle_t s_nvsMutex = NULL;
 
 // ============================================================
 // Utility Functions
@@ -425,6 +426,9 @@ static bool loadStatsFromSD(mining_persistence_t *stats) {
 void nvs_config_init() {
     if (s_initialized) return;
 
+    // Create NVS mutex for thread-safe access
+    s_nvsMutex = xSemaphoreCreateMutex();
+
     // Brief delay to ensure flash controller is stable after boot/flash
     delay(100);
 
@@ -470,7 +474,10 @@ void nvs_config_init() {
 bool nvs_config_load(miner_config_t *config) {
     Serial.printf("[NVS] Loading config (struct size: %d bytes)\n", sizeof(miner_config_t));
 
+    if (s_nvsMutex) xSemaphoreTake(s_nvsMutex, portMAX_DELAY);
+
     if (!s_prefs.begin(NVS_NAMESPACE, true)) {  // Read-only
+        if (s_nvsMutex) xSemaphoreGive(s_nvsMutex);
         Serial.println("[NVS] Failed to open namespace (may be first boot)");
         return false;
     }
@@ -479,6 +486,7 @@ bool nvs_config_load(miner_config_t *config) {
     if (len == 0) {
         Serial.println("[NVS] No saved config found (first boot or erased)");
         s_prefs.end();
+        if (s_nvsMutex) xSemaphoreGive(s_nvsMutex);
         return false;
     }
 
@@ -491,11 +499,13 @@ bool nvs_config_load(miner_config_t *config) {
             s_prefs.remove(NVS_KEY_CONFIG);
             s_prefs.end();
         }
+        if (s_nvsMutex) xSemaphoreGive(s_nvsMutex);
         return false;
     }
 
     size_t read = s_prefs.getBytes(NVS_KEY_CONFIG, config, sizeof(miner_config_t));
     s_prefs.end();
+    if (s_nvsMutex) xSemaphoreGive(s_nvsMutex);
 
     if (read != sizeof(miner_config_t)) {
         Serial.printf("[NVS] Failed to read config: read=%d, expected=%d\n", read, sizeof(miner_config_t));
@@ -525,13 +535,17 @@ bool nvs_config_save(const miner_config_t *config) {
     miner_config_t configCopy = *config;
     configCopy.checksum = calculateChecksum(&configCopy);
 
+    if (s_nvsMutex) xSemaphoreTake(s_nvsMutex, portMAX_DELAY);
+
     if (!s_prefs.begin(NVS_NAMESPACE, false)) {  // Read-write
+        if (s_nvsMutex) xSemaphoreGive(s_nvsMutex);
         Serial.println("[NVS] ERROR: Failed to open namespace for writing");
         return false;
     }
 
     size_t written = s_prefs.putBytes(NVS_KEY_CONFIG, &configCopy, sizeof(miner_config_t));
     s_prefs.end();
+    if (s_nvsMutex) xSemaphoreGive(s_nvsMutex);
 
     if (written != sizeof(miner_config_t)) {
         Serial.printf("[NVS] ERROR: Write failed - wrote %d of %d bytes\n", written, sizeof(miner_config_t));
@@ -571,9 +585,13 @@ void nvs_config_reset(miner_config_t *config) {
     // Display defaults
     config->brightness = 100;
     config->screenTimeout = 0;  // Never timeout
-    config->rotation = 0;       // Portrait USB Top (default)
+    #if defined(M5STICKC_PLUS2)
+        config->rotation = 1;   // Portrait orientation for M5StickC Plus2
+    #else
+        config->rotation = 0;   // Portrait USB Top (default)
+    #endif
     config->displayEnabled = true;
-    config->invertColors = true;   // Dark theme (default) - CYD panel is inverted, so invertDisplay(true) = dark
+    config->invertColors = false;   // Dark theme (default) - CYD panel is inverted, so invertDisplay(true) = dark
     config->timezoneOffset = 0;    // UTC+0 default
 
     // Miner defaults
@@ -624,7 +642,10 @@ static uint32_t calculateStatsChecksum(const mining_persistence_t *stats) {
 }
 
 bool nvs_stats_load(mining_persistence_t *stats) {
+    if (s_nvsMutex) xSemaphoreTake(s_nvsMutex, portMAX_DELAY);
+
     if (!s_prefs.begin(NVS_NAMESPACE, true)) {  // Read-only
+        if (s_nvsMutex) xSemaphoreGive(s_nvsMutex);
         Serial.println("[NVS-STATS] Failed to open namespace");
         return false;
     }
@@ -633,11 +654,13 @@ bool nvs_stats_load(mining_persistence_t *stats) {
     if (len != sizeof(mining_persistence_t)) {
         Serial.printf("[NVS-STATS] Stats size mismatch: %d vs %d\n", len, sizeof(mining_persistence_t));
         s_prefs.end();
+        if (s_nvsMutex) xSemaphoreGive(s_nvsMutex);
         return false;
     }
 
     size_t read = s_prefs.getBytes(NVS_KEY_STATS, stats, sizeof(mining_persistence_t));
     s_prefs.end();
+    if (s_nvsMutex) xSemaphoreGive(s_nvsMutex);
 
     if (read != sizeof(mining_persistence_t)) {
         Serial.println("[NVS-STATS] Failed to read stats");
@@ -655,10 +678,12 @@ bool nvs_stats_load(mining_persistence_t *stats) {
     if (stats->checksum != expected) {
         Serial.printf("[NVS-STATS] Checksum mismatch: %08x vs %08x - clearing corrupted data\n", stats->checksum, expected);
         // Clear corrupted stats from NVS
+        if (s_nvsMutex) xSemaphoreTake(s_nvsMutex, portMAX_DELAY);
         if (s_prefs.begin(NVS_NAMESPACE, false)) {
             s_prefs.remove(NVS_KEY_STATS);
             s_prefs.end();
         }
+        if (s_nvsMutex) xSemaphoreGive(s_nvsMutex);
         memset(stats, 0, sizeof(mining_persistence_t));
         return false;
     }
@@ -685,13 +710,17 @@ bool nvs_stats_save(const mining_persistence_t *stats) {
     statsCopy.magic = STATS_MAGIC;
     statsCopy.checksum = calculateStatsChecksum(&statsCopy);
 
+    if (s_nvsMutex) xSemaphoreTake(s_nvsMutex, portMAX_DELAY);
+
     if (!s_prefs.begin(NVS_NAMESPACE, false)) {  // Read-write
+        if (s_nvsMutex) xSemaphoreGive(s_nvsMutex);
         Serial.println("[NVS-STATS] Failed to open namespace for writing");
         return false;
     }
 
     size_t written = s_prefs.putBytes(NVS_KEY_STATS, &statsCopy, sizeof(mining_persistence_t));
     s_prefs.end();
+    if (s_nvsMutex) xSemaphoreGive(s_nvsMutex);
 
     if (written != sizeof(mining_persistence_t)) {
         Serial.println("[NVS-STATS] Failed to write stats");

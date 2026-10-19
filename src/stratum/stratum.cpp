@@ -12,7 +12,6 @@
 #include <board_config.h>
 #include "stratum.h"
 #include "../mining/miner.h"
-#include "../config/nvs_config.h"  // WiFi credentials for explicit reconnect (Issue #31)
 
 // ============================================================ 
 // Constants
@@ -489,6 +488,13 @@ static void submitShare(WiFiClient &client, const submit_entry_t *entry) {
         pending.msgId = msgId;
         pending.sentTime = millis();
 
+        // Check if the slot we're about to use is still pending
+        // If so, we're overwriting an unacknowledged submission
+        if (s_pendingResponses[s_pendingIndex].msgId != 0) {
+            Serial.printf("[STRATUM] WARNING: Overwriting pending response slot %u (msgId=%lu)\n",
+                          s_pendingIndex, s_pendingResponses[s_pendingIndex].msgId);
+        }
+
         s_pendingResponses[s_pendingIndex] = pending;
         s_pendingIndex = (s_pendingIndex + 1) % MAX_PENDING_SUBMISSIONS;
 
@@ -543,17 +549,7 @@ void stratum_task(void *param) {
                 s_lastWifiReconnectAttempt = millis();
                 Serial.printf("[WIFI] Reconnect attempt %lu (backoff: %lums)\n",
                               s_wifiReconnectAttempts, backoffMs);
-                // Issue #31: WiFi.reconnect() reuses the SDK's cached credentials,
-                // which are dropped after an AP reboot / AUTH_EXPIRE, so it can fail
-                // forever and force a power cycle. Re-issue begin() with the SSID/PSK
-                // stored in NVS so reconnection survives those cases.
-                miner_config_t *cfg = nvs_config_get();
-                if (cfg && cfg->ssid[0]) {
-                    WiFi.disconnect(false);  // drop association, keep stored config
-                    WiFi.begin(cfg->ssid, cfg->wifiPassword);
-                } else {
-                    WiFi.reconnect();
-                }
+                WiFi.reconnect();
             }
 
             vTaskDelay(500 / portTICK_PERIOD_MS);
@@ -679,12 +675,14 @@ void stratum_task(void *param) {
         }
 
         // Send keepalive if idle
+        // Use mining.subscribe as keepalive - most pools respond to this
+        // and it's a standard Stratum v1 message
         if (millis() - s_lastSubmit > KEEPALIVE_MS) {
             char msg[STRATUM_MSG_BUFFER];
             uint32_t keepId = getNextId();
             snprintf(msg, sizeof(msg),
-                "{\"id\":%lu,\"method\":\"mining.suggest_difficulty\",\"params\":[%.10g]}",
-                keepId, DESIRED_DIFFICULTY);
+                "{\"id\":%lu,\"method\":\"mining.subscribe\",\"params\":[\"%s/%s\"]}",
+                keepId, MINER_NAME, AUTO_VERSION);
             sendMessage(client, msg);
             s_lastSubmit = millis();
         }

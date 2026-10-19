@@ -7,6 +7,7 @@
 #define MONITOR_H
 
 #include <Arduino.h>
+#include "../display/display.h"
 
 /**
  * Initialize monitor subsystem
@@ -24,5 +25,11 @@ void monitor_task(void *param);
  * Call on user input (button press, touch) to keep screen on
  */
 void monitor_reset_activity();
+
+/**
+ * Copy the last display snapshot into caller-provided buffer.
+ * @param out pointer to display_data_t to fill
+ */
+void monitor_get_display_snapshot(display_data_t *out);
 
 #endif // MONITOR_H
