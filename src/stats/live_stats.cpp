@@ -881,6 +881,12 @@ static void updateNetworkDifficulty() {
 void live_stats_init() {
     s_statsMutex = xSemaphoreCreateMutex();
 
+    #ifdef ADVANCED_LOCAL_ONLY_STATS
+    s_statsEnabled = false;
+    Serial.println("[STATS] Local mining statistics mode; external API task disabled");
+    return;
+    #endif
+
     // Load stats config
     miner_config_t *config = nvs_config_get();
 

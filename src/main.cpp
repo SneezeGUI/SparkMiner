@@ -31,6 +31,10 @@ extern "C" {
 #include "stratum/stratum_types.h"
 #include "stratum/stratum.h"
 #include "config/nvs_config.h"
+#include "stats/advanced_web.h"
+#ifdef ADVANCED_LOCAL_CONTROLS
+#include "stats/local_settings.h"
+#endif
 #include "config/wifi_manager.h"
 #include "stats/monitor.h"
 #include "display/display.h"
@@ -88,6 +92,10 @@ void onButtonMultiClick() {
         miner_config_t *config = nvs_config_get();
         config->invertColors = !config->invertColors;
         display_set_inverted(config->invertColors);
+        #ifdef ADVANCED_LOCAL_CONTROLS
+        display_set_touch_enabled(nvs_touch_enabled());
+        if(!config->displayEnabled) display_set_backlight_off();
+        #endif
         nvs_config_save(config);
         Serial.printf("[BUTTON] Theme switched to %s mode\n", config->invertColors ? "Dark" : "Light");
     }
@@ -147,7 +155,13 @@ void onButtonLongPressStart() {
 void button_task(void *param) {
     Serial.println("[BUTTON] Task started on core 0");
     for (;;) {
+        #ifdef ADVANCED_LOCAL_CONTROLS
+        if(local_settings_blocks_checkpoint()){vTaskDelay(pdMS_TO_TICKS(10));continue;}
+        #endif
         button.tick();
+        #ifdef ADVANCED_LOCAL_CONTROLS
+        display_touch_poll();
+        #endif
         vTaskDelay(pdMS_TO_TICKS(10));  // 10ms polling = responsive buttons
     }
 }
@@ -512,6 +526,10 @@ void setupTasks() {
         &monitorTask,
         MONITOR_CORE
     );
+
+    if (!advanced_stats_web_start()) {
+        Serial.println("[ADVANCED] Statistics web task could not be allocated");
+    }
 
     // Button task (responsive UI during mining)
     // Needs 4KB+ stack for NVS writes (rotation save) and display updates

@@ -10,6 +10,7 @@
 
 #include <Arduino.h>
 #include <board_config.h>
+#include <advanced_statistics.hpp>
 
 /**
  * Miner configuration structure
@@ -137,20 +138,12 @@ bool nvs_stats_save(const mining_persistence_t *stats);
  */
 mining_persistence_t* nvs_stats_get();
 
-/**
- * Update persistent stats from current session
- * Call periodically (every 1 hour) and on shutdown
- * @param currentHashes Hashes from current session
- * @param currentShares Shares from current session
- * @param currentAccepted Accepted from current session
- * @param currentRejected Rejected from current session
- * @param currentBlocks Blocks from current session
- * @param sessionSeconds Uptime of current session
- * @param bestDiff Best difficulty this session
- */
-void nvs_stats_update(uint64_t currentHashes, uint32_t currentShares,
-                      uint32_t currentAccepted, uint32_t currentRejected,
-                      uint32_t currentBlocks, uint32_t sessionSeconds,
-                      double bestDiff);
+/** Save absolute lifetime totals; cache changes only after a successful NVS write. */
+bool nvs_stats_store_totals(const advanced::Counters& total);
 
 #endif // NVS_CONFIG_H
+
+// Separate key preserves the existing configuration blob layout.
+bool nvs_touch_enabled();
+bool nvs_touch_save(bool enabled);
+bool nvs_factory_clear();

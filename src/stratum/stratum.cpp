@@ -1,3 +1,5 @@
+#include "../config/nvs_config.h"
+#include <pool_address.hpp>
 /*
  * SparkMiner - Stratum Protocol Implementation
  * Stratum v1 client for pool communication
@@ -39,6 +41,8 @@ static char s_currentPoolUrl[MAX_POOL_URL_LEN] = {0};
 
 // Stores the fully authorized username (e.g. "wallet.worker") for use in submissions
 static char s_authorizedWorkerName[MAX_WALLET_LEN + 34] = {0};
+// Runtime value is set before tasks start; web changes take effect after restart.
+static double s_requestedDifficulty = DESIRED_DIFFICULTY;
 
 static uint32_t s_messageId = 1;
 static uint32_t s_lastActivity = 0;
@@ -278,17 +282,12 @@ static void handleServerMessage(WiFiClient &client) {
         // Find matching pending submission
         for (int i = 0; i < MAX_PENDING_SUBMISSIONS; i++) {
             if (s_pendingResponses[i].msgId == msgId) {
-                mining_stats_t *stats = miner_get_stats();
-
                 uint32_t latency = millis() - s_pendingResponses[i].sentTime;
-                stats->lastLatency = latency;
-                stats->avgLatency = (stats->avgLatency == 0) ? latency : ((stats->avgLatency * 9 + latency) / 10);
+                miner_record_result(accepted, latency);
 
                 if (accepted) {
-                    stats->accepted++;
                     dbg("[STRATUM] Share accepted!\n");
                 } else {
-                    stats->rejected++;
                     const char *reason = s_doc["error"][1] | "unknown";
                     dbg("[STRATUM] Share rejected: %s\n", reason);
                     Serial.printf("[STRATUM] Share rejected: %s\n", reason);
@@ -402,9 +401,7 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
 
     // Record subscribe latency
     uint32_t subLatency = millis() - startSub;
-    mining_stats_t *stats = miner_get_stats();
-    stats->lastLatency = subLatency;
-    stats->avgLatency = (stats->avgLatency == 0) ? subLatency : ((stats->avgLatency * 9 + subLatency) / 10);
+    miner_record_latency(subLatency);
 
     if (!parseSubscribeResponse(resp)) {
         Serial.println("[STRATUM] Subscribe failed");
@@ -415,7 +412,7 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
     uint32_t diffId = getNextId();
     snprintf(msg, sizeof(msg),
         "{\"id\":%lu,\"method\":\"mining.suggest_difficulty\",\"params\":[%.10g]}",
-        diffId, DESIRED_DIFFICULTY);
+        diffId, s_requestedDifficulty);
     sendMessage(client, msg);
 
     // Mining.authorize - append worker name if set
@@ -448,8 +445,7 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
 
     // Record authorize latency
     uint32_t authLatency = millis() - startAuth;
-    stats->lastLatency = authLatency;
-    stats->avgLatency = (stats->avgLatency * 9 + authLatency) / 10;
+    miner_record_latency(authLatency);
 
     if (!parseAuthorizeResponse(resp)) {
         Serial.println("[STRATUM] Authorization failed");
@@ -493,7 +489,7 @@ static void submitShare(WiFiClient &client, const submit_entry_t *entry) {
         s_pendingIndex = (s_pendingIndex + 1) % MAX_PENDING_SUBMISSIONS;
 
         s_lastSubmit = millis();
-        miner_get_stats()->shares++;
+        miner_record_submitted();
     }
 }
 
@@ -684,7 +680,7 @@ void stratum_task(void *param) {
             uint32_t keepId = getNextId();
             snprintf(msg, sizeof(msg),
                 "{\"id\":%lu,\"method\":\"mining.suggest_difficulty\",\"params\":[%.10g]}",
-                keepId, DESIRED_DIFFICULTY);
+                keepId, s_requestedDifficulty);
             sendMessage(client, msg);
             s_lastSubmit = millis();
         }
@@ -725,7 +721,8 @@ const char* stratum_get_pool() {
 }
 
 void stratum_set_pool(const char *url, int port, const char *wallet, const char *password, const char *workerName) {
-    safeStrCpy(s_primaryPool.url, url, MAX_POOL_URL_LEN);
+    s_requestedDifficulty = nvs_config_get()->targetDifficulty;
+    safeStrCpy(s_primaryPool.url, advanced::tcp_pool_host(url), MAX_POOL_URL_LEN);
     s_primaryPool.port = port;
     safeStrCpy(s_primaryPool.wallet, wallet, MAX_WALLET_LEN);
     safeStrCpy(s_primaryPool.password, password, MAX_PASSWORD_LEN);
@@ -737,7 +734,7 @@ void stratum_set_pool(const char *url, int port, const char *wallet, const char 
 }
 
 void stratum_set_backup_pool(const char *url, int port, const char *wallet, const char *password, const char *workerName) {
-    safeStrCpy(s_backupPool.url, url, MAX_POOL_URL_LEN);
+    safeStrCpy(s_backupPool.url, advanced::tcp_pool_host(url), MAX_POOL_URL_LEN);
     s_backupPool.port = port;
     safeStrCpy(s_backupPool.wallet, wallet, MAX_WALLET_LEN);
     safeStrCpy(s_backupPool.password, password, MAX_PASSWORD_LEN);
