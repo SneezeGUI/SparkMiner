@@ -10,6 +10,7 @@
 
 #include <Arduino.h>
 #include <board_config.h>
+#include <advanced_statistics.hpp>
 #include "display/display_interface.h"
 
 // Screen types (also defined in display_interface.h)
@@ -24,10 +25,15 @@
 // NOTE: Using fixed char arrays instead of Arduino String to prevent heap fragmentation
 // The struct tag display_data_s is used by display_interface.h forward declaration
 struct display_data_s {
+    // Exact shared snapshot for the local session/lifetime statistics page.
+    advanced::Counters sessionStats;
+    advanced::Counters lifetimeStats;
     // Mining stats
     uint64_t totalHashes;
     double hashRate;
     double bestDifficulty;
+    double sessionSuccessPercent;  // -1 means no pool replies yet
+    double totalSuccessPercent;
     uint32_t sharesAccepted;
     uint32_t sharesRejected;
     uint32_t templates;
@@ -217,3 +223,8 @@ bool display_is_backlight_off();
 #endif // USE_DISPLAY
 
 #endif // DISPLAY_H
+
+// Poll touch input without drawing; called only by the button task.
+void display_touch_poll();
+
+void display_set_touch_enabled(bool enabled);

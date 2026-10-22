@@ -10,6 +10,8 @@
 #include <math.h>
 #include <board_config.h>
 #include "display.h"
+#include <ui_controls.hpp>
+#include <mining_panel.hpp>
 
 #if USE_DISPLAY
 
@@ -94,6 +96,31 @@ static TFT_eSprite s_sprite = TFT_eSprite(&s_tft);
 //     static SPIClass s_touchSpi = SPIClass(VSPI);
 //     static XPT2046_Touchscreen s_touch(TOUCH_CS_PIN, TOUCH_IRQ_PIN);
 // #endif
+
+#if defined(ADVANCED_LOCAL_CONTROLS) && defined(ESP32_2432S028)
+// Software SPI keeps the touch pins isolated from TFT/SD hardware SPI routing.
+static advanced::TouchDebounce s_touchFilter;
+static portMUX_TYPE s_touchMux=portMUX_INITIALIZER_UNLOCKED;
+static bool s_touchPending=false;
+static bool s_touchEnabled=true;
+static uint8_t touchTransfer(uint8_t value) {
+    uint8_t result=0;
+    for(int i=7;i>=0;--i){
+        digitalWrite(TOUCH_MOSI_PIN,(value>>i)&1);
+        delayMicroseconds(2);
+        digitalWrite(TOUCH_CLK_PIN,HIGH);
+        result=uint8_t((result<<1)|(digitalRead(TOUCH_MISO_PIN)?1:0));
+        delayMicroseconds(2);
+        digitalWrite(TOUCH_CLK_PIN,LOW);
+    }
+    return result;
+}
+static int touchChannel(uint8_t command) {
+    touchTransfer(command);
+    int high=touchTransfer(0),low=touchTransfer(0);
+    return ((high<<8)|low)>>3;
+}
+#endif
 
 static uint8_t s_currentScreen = SCREEN_MINING;
 static uint8_t s_brightness = 100;
@@ -396,6 +423,10 @@ static void drawBottomStatusBar(const display_data_t *data) {
     }
 }
 
+static String formatSuccessPercent(double value) {
+    return value < 0 ? String("--") : String(value, 2) + "%";
+}
+
 static void drawMiningScreen(const display_data_t *data) {
     int w = display_get_width();
     int y = HEADER_HEIGHT + 8;
@@ -426,8 +457,13 @@ static void drawMiningScreen(const display_data_t *data) {
     s_tft.print("Shares");
     s_tft.setTextColor(COLOR_FG);
     s_tft.setCursor(sharesX, y + 16);
-    String shares = String(data->sharesAccepted) + "/" + String(data->sharesAccepted + data->sharesRejected);
+    char replies[24];
+    snprintf(replies, sizeof replies, "%llu",
+             static_cast<unsigned long long>(static_cast<uint64_t>(data->sharesAccepted) + data->sharesRejected));
+    String shares = String(data->sharesAccepted) + "/" + String(replies);
     s_tft.print(shares);
+    s_tft.setCursor(sharesX, y + 26);
+    s_tft.print("T " + formatSuccessPercent(data->totalSuccessPercent));
 
     y += 44;
 
@@ -445,17 +481,23 @@ static void drawMiningScreen(const display_data_t *data) {
         {"Uptime",   formatUptime(data->uptimeSeconds), COLOR_FG},
         {"Jobs",     String(data->templates), COLOR_FG},
         {"Blocks",   String(data->blocksFound), COLOR_SUCCESS},
+        #ifdef ADVANCED_LOCAL_ONLY_STATS
+        {"Sitzung OK", formatSuccessPercent(data->sessionSuccessPercent), COLOR_SPARK1},
+        #else
         {"Swarm HR", (strlen(data->workerHashrate) > 0) ? String(data->workerHashrate) : "---", COLOR_SPARK1},
+        #endif
     };
 
+    int gridStep = isPortrait ? LINE_HEIGHT + 12 : LINE_HEIGHT + 6;
+    int gridBoxHeight = isPortrait ? LINE_HEIGHT + 8 : LINE_HEIGHT + 4;
     for (int i = 0; i < 6; i++) {
         int col = i % cols;
         int row = i / cols;
         int x = MARGIN + col * (boxW + MARGIN);
-        int ly = y + row * (LINE_HEIGHT + 12);
+        int ly = y + row * gridStep;
 
         // Mini panel
-        s_tft.fillRoundRect(x - 2, ly - 2, boxW, LINE_HEIGHT + 8, 3, COLOR_PANEL);
+        s_tft.fillRoundRect(x - 2, ly - 2, boxW, gridBoxHeight, 3, COLOR_PANEL);
 
         s_tft.setTextColor(COLOR_DIM);
         s_tft.setCursor(x + 2, ly);
@@ -467,7 +509,7 @@ static void drawMiningScreen(const display_data_t *data) {
     }
 
     int gridRows = isPortrait ? 3 : 2;
-    y += gridRows * (LINE_HEIGHT + 12) + 8;
+    y += gridRows * gridStep + 8;
 
     // Pool info panel
     s_tft.fillRoundRect(MARGIN - 4, y, w - 2*MARGIN + 8, 50, 4, COLOR_PANEL);
@@ -488,7 +530,7 @@ static void drawMiningScreen(const display_data_t *data) {
     s_tft.setTextColor(statusColor);
     
     // Truncate pool name if needed
-    String poolName = data->poolName ? data->poolName : "Disconnected";
+    String poolName = (data->poolName && data->poolName[0]) ? data->poolName : "Verbinde...";
     if (isPortrait && poolName.length() > 12) poolName = poolName.substring(0, 10) + "..";
     s_tft.print(poolName);
 
@@ -508,6 +550,19 @@ static void drawMiningScreen(const display_data_t *data) {
     s_tft.setTextColor(COLOR_FG);
     s_tft.print(formatDifficulty(data->poolDifficulty));
 
+    #ifdef ADVANCED_LOCAL_ONLY_STATS
+    // Local values from the current Stratum connection and shared snapshot.
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(w - 90, y);s_tft.print("Ping: ");
+    s_tft.setTextColor(COLOR_SPARK2);
+    s_tft.print(data->poolConnected ? String(data->avgLatency) + " ms" : "--");
+    y += 14;
+    s_tft.setTextColor(COLOR_DIM);
+    s_tft.setCursor(MARGIN + 2, y);s_tft.print("OK: ");
+    s_tft.setTextColor(COLOR_SUCCESS);s_tft.print(String(data->sharesAccepted));
+    s_tft.setCursor(w - 90, y);s_tft.setTextColor(COLOR_DIM);s_tft.print("Abg: ");
+    s_tft.setTextColor(COLOR_FG);s_tft.print(String(data->sharesRejected));
+    #else
     // Fee rate on right side of Diff line
     s_tft.setTextColor(COLOR_DIM);
     s_tft.setCursor(w - 90, y);
@@ -530,6 +585,8 @@ static void drawMiningScreen(const display_data_t *data) {
     s_tft.setTextColor(COLOR_FG);
     s_tft.print(data->blockHeight > 0 ? String(data->blockHeight) : "---");
 
+    #endif
+
     y += 22;
 
     // LAN Info panel
@@ -547,107 +604,32 @@ static void drawMiningScreen(const display_data_t *data) {
     drawBottomStatusBar(data);
 }
 
-static void drawStatsScreen(const display_data_t *data) {
-    int w = display_get_width();
-    int y = HEADER_HEIGHT + 8;
-
-    // BTC Price panel
-    s_tft.fillRoundRect(MARGIN - 4, y - 4, w - 2*MARGIN + 8, 38, 4, COLOR_PANEL);
-    s_tft.drawRoundRect(MARGIN - 4, y - 4, w - 2*MARGIN + 8, 38, 4, COLOR_SPARK1);
-
-    s_tft.setTextSize(2);
-    s_tft.setCursor(MARGIN + 4, y + 6);
-    s_tft.setTextColor(COLOR_SPARK1);
-    if (data->btcPrice > 0) {
-        s_tft.print("$");
-        s_tft.print(String(data->btcPrice, 0));
-    } else {
-        s_tft.setTextColor(COLOR_DIM);
-        s_tft.print("Loading...");
-    }
-
-    // Block height on right
+static void drawLocalPanel(int top, int height, const char* title, const advanced::Counters& counters) {
+    const auto panel=advanced::mining_panel(counters);
+    int w=display_get_width();
+    s_tft.fillRoundRect(MARGIN-4,top,w-2*MARGIN+8,height,4,COLOR_PANEL);
+    s_tft.drawRoundRect(MARGIN-4,top,w-2*MARGIN+8,height,4,COLOR_ACCENT);
     s_tft.setTextSize(1);
-    s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(w - 100, y + 4);
-    s_tft.print("Block");
-    s_tft.setTextColor(COLOR_FG);
-    s_tft.setCursor(w - 100, y + 16);
-    s_tft.print(data->blockHeight > 0 ? String(data->blockHeight) : "---");
-
-    y += 44;
-
-    // Network stats panel
-    s_tft.fillRoundRect(MARGIN - 4, y, w - 2*MARGIN + 8, 60, 4, COLOR_PANEL);
-
-    y += 6;
-    s_tft.setTextSize(1);
-
-    // Network hashrate
-    s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(MARGIN + 2, y);
-    s_tft.print("Network: ");
-    s_tft.setTextColor(COLOR_FG);
-    s_tft.print(strlen(data->networkHashrate) > 0 ? data->networkHashrate : "---");
-
-    // Fee on right
-    s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(w - 90, y);
-    s_tft.print("Fee: ");
-    s_tft.setTextColor(COLOR_SPARK2);
-    s_tft.print(data->halfHourFee > 0 ? String(data->halfHourFee) + " sat" : "---");
-
-    y += 16;
-
-    // Difficulty
-    s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(MARGIN + 2, y);
-    s_tft.print("Difficulty: ");
-    s_tft.setTextColor(COLOR_FG);
-    s_tft.print(strlen(data->networkDifficulty) > 0 ? data->networkDifficulty : "---");
-
-    y += 32;
-
-    // Your mining panel
-    s_tft.fillRoundRect(MARGIN - 4, y, w - 2*MARGIN + 8, 55, 4, COLOR_PANEL);
-    s_tft.drawRoundRect(MARGIN - 4, y, w - 2*MARGIN + 8, 55, 4, COLOR_ACCENT);
-
-    y += 6;
-
     s_tft.setTextColor(COLOR_ACCENT);
-    s_tft.setCursor(MARGIN + 2, y);
-    s_tft.print("Your Mining");
-
-    // Pool workers
-    if (data->poolWorkersTotal > 0) {
-        s_tft.setTextColor(COLOR_SPARK1);
-        s_tft.setCursor(w - 90, y);
-        s_tft.print(String(data->poolWorkersTotal) + " on pool");
-    }
-
-    y += 14;
-
-    s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(MARGIN + 2, y);
-    s_tft.print("Rate: ");
-    s_tft.setTextColor(COLOR_FG);
-    s_tft.print(formatHashrate(data->hashRate));
-
-    y += 14;
-
-    s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(MARGIN + 2, y);
-    s_tft.print("Best: ");
+    s_tft.setCursor(MARGIN+2,top+6);s_tft.print(title);
+    int right=w-MARGIN-2;
     s_tft.setTextColor(COLOR_SPARK1);
-    s_tft.print(formatDifficulty(data->bestDifficulty));
-
-    // Shares on right
-    s_tft.setTextColor(COLOR_DIM);
-    s_tft.setCursor(w - 90, y);
-    s_tft.print("Shares: ");
-    s_tft.setTextColor(COLOR_FG);
-    s_tft.print(String(data->sharesAccepted));
-
+    s_tft.setCursor(right-int(strlen(panel.success))*6,top+6);s_tft.print(panel.success);
+    const char* labels[]={"Hashes","Gesendet","Akzeptiert","Abgelehnt","Laufzeit"};
+    const char* values[]={panel.hashes,panel.submitted,panel.accepted,panel.rejected,panel.uptime};
+    int step=(height-24)/5;
+    for(int i=0;i<5;++i){
+        int y=top+22+i*step;
+        s_tft.setTextColor(COLOR_DIM);s_tft.setCursor(MARGIN+2,y);s_tft.print(labels[i]);
+        s_tft.setTextColor(COLOR_FG);s_tft.setCursor(right-int(strlen(values[i]))*6,y);s_tft.print(values[i]);
+    }
+}
+static void drawStatsScreen(const display_data_t *data) {
+    int top=HEADER_HEIGHT+8;
+    int footer=display_is_portrait()?32:0;
+    int panelHeight=(display_get_height()-top-footer-16)/2;
+    drawLocalPanel(top,panelHeight,"Sitzung / OK",data->sessionStats);
+    drawLocalPanel(top+panelHeight+8,panelHeight,"Gesamt / OK",data->lifetimeStats);
     drawBottomStatusBar(data);
 }
 
@@ -758,6 +740,15 @@ void display_init(uint8_t rotation, uint8_t brightness) {
         pinMode(PIN_ENABLE5V, OUTPUT);
         digitalWrite(PIN_ENABLE5V, HIGH);
         delay(10);  // Allow power to stabilize
+    #endif
+
+    #if defined(ADVANCED_LOCAL_CONTROLS) && defined(ESP32_2432S028)
+        pinMode(TOUCH_CS_PIN,OUTPUT);digitalWrite(TOUCH_CS_PIN,HIGH);
+        pinMode(TOUCH_CLK_PIN,OUTPUT);digitalWrite(TOUCH_CLK_PIN,LOW);
+        pinMode(TOUCH_MOSI_PIN,OUTPUT);digitalWrite(TOUCH_MOSI_PIN,LOW);
+        pinMode(TOUCH_MISO_PIN,INPUT);pinMode(TOUCH_IRQ_PIN,INPUT);
+        digitalWrite(TOUCH_CS_PIN,LOW);touchChannel(0xD0);digitalWrite(TOUCH_CS_PIN,HIGH);
+        Serial.println("[TOUCH] XPT2046 pressure input enabled (isolated software SPI)");
     #endif
 
     // Initialize TFT
@@ -891,7 +882,14 @@ void display_update(const display_data_t *data) {
     // Check if anything changed
     bool dataChanged = (data->totalHashes != s_lastData.totalHashes) ||
         (abs(data->hashRate - s_lastData.hashRate) > 100) ||
-        (data->sharesAccepted != s_lastData.sharesAccepted);
+        (data->sharesAccepted != s_lastData.sharesAccepted) ||
+        (data->sharesRejected != s_lastData.sharesRejected) ||
+        (data->sessionSuccessPercent != s_lastData.sessionSuccessPercent) ||
+        (data->totalSuccessPercent != s_lastData.totalSuccessPercent) ||
+        (data->sessionStats.hashes != s_lastData.sessionStats.hashes) ||
+        (data->sessionStats.submitted != s_lastData.sessionStats.submitted) ||
+        (data->sessionStats.uptime_s != s_lastData.sessionStats.uptime_s) ||
+        (data->lifetimeStats.uptime_s != s_lastData.lifetimeStats.uptime_s);
 
     bool statusChanged = (data->poolConnected != s_lastData.poolConnected) ||
         (data->wifiConnected != s_lastData.wifiConnected);
@@ -1014,14 +1012,41 @@ void display_show_reset_complete() {
     s_tft.print("Resetting...");
 }
 
-bool display_touched() {
-    // Touch disabled - XPT2046 implementation had issues on CYD
-    // See memory bank for details on failed implementation attempts
-    return false;
+void display_touch_poll() {
+#if defined(ADVANCED_LOCAL_CONTROLS) && defined(ESP32_2432S028)
+    static uint32_t last=0;uint32_t now=millis();if(uint32_t(now-last)<10)return;last=now;
+    if(!s_touchEnabled)return;
+    bool down=false;
+    if(digitalRead(TOUCH_IRQ_PIN)==LOW){
+        digitalWrite(TOUCH_CS_PIN,LOW);
+        int z1=touchChannel(0xB1),z2=touchChannel(0xC1);
+        touchChannel(0xD0); // Power down ADC and restore PENIRQ.
+        digitalWrite(TOUCH_CS_PIN,HIGH);
+        down=(z1>0 && z1<4095 && z2>0 && z2<4095 && z1+4095-z2>=250);
+    }
+    if(s_touchFilter.sample(down,now)){
+        portENTER_CRITICAL(&s_touchMux);s_touchPending=true;portEXIT_CRITICAL(&s_touchMux);
+        Serial.println("[TOUCH] Tap detected");
+    }
+#endif
 }
-
+void display_set_touch_enabled(bool enabled) {
+#if defined(ADVANCED_LOCAL_CONTROLS) && defined(ESP32_2432S028)
+    s_touchEnabled=enabled;
+#else
+    (void)enabled;
+#endif
+}
+bool display_touched() {
+#if defined(ADVANCED_LOCAL_CONTROLS) && defined(ESP32_2432S028)
+    portENTER_CRITICAL(&s_touchMux);bool pending=s_touchPending;s_touchPending=false;portEXIT_CRITICAL(&s_touchMux);
+    return pending;
+#else
+    return false;
+#endif
+}
 void display_handle_touch() {
-    // Touch disabled - use button to cycle screens instead
+    if(display_is_backlight_off()){display_set_backlight_on();return;}
     display_next_screen();
 }
 

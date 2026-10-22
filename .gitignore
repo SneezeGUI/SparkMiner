@@ -28,3 +28,7 @@ nul
 
 # Local config (sensitive)
 config.json
+
+# Local statistics regression tests
+.test-output/
+.test-cache/

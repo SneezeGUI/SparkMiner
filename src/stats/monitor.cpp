@@ -1,3 +1,6 @@
+#ifdef ADVANCED_LOCAL_CONTROLS
+#include "local_settings.h"
+#endif
 /*
  * SparkMiner - Monitor Task Implementation
  * Coordinates display updates and live stats fetching
@@ -5,6 +8,10 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_timer.h>
+#include <advanced_statistics.hpp>
+#include <pool_address.hpp>
+#include "advanced_web.h"
 #include <board_config.h>
 #include "monitor.h"
 #include "live_stats.h"
@@ -18,94 +25,69 @@
 // Update intervals
 #define DISPLAY_UPDATE_MS   1000    // 1 second
 #define STATS_UPDATE_MS     10000   // 10 seconds
-#define PERSIST_STATS_MS    3600000 // 1 hour - save to flash for persistence
-#define EARLY_SAVE_MS       300000  // 5 minutes - initial save interval before first hourly
 #define LED_UPDATE_MS       50      // 50ms for smooth LED animations
 
 static bool s_initialized = false;
 static uint32_t s_lastDisplayUpdate = 0;
 static uint32_t s_lastStatsUpdate = 0;
-static uint32_t s_lastPersistSave = 0;
 static uint32_t s_lastLedUpdate = 0;
-static uint32_t s_startTime = 0;
 static uint32_t s_lastActivityTime = 0;  // Screen timeout tracking
-static bool s_earlySaveDone = false;      // Track if we've done the early save
-static uint32_t s_lastAcceptedCount = 0;  // Track shares for first-share save
 static uint32_t s_lastLedShareCount = 0;  // Track shares for LED flash
 
-// Track session start values to calculate deltas for persistence
-static uint64_t s_sessionStartHashes = 0;
-static uint32_t s_sessionStartShares = 0;
-static uint32_t s_sessionStartAccepted = 0;
-static uint32_t s_sessionStartRejected = 0;
-static uint32_t s_sessionStartBlocks = 0;
+static advanced::Ledger s_ledger;
+static advanced::SessionClock s_clock;
+static advanced::SavePolicy s_savePolicy;
+static advanced::Rate s_rate;
+static bool s_lastSaveOk = true, s_saveAttempted = false;
+static uint64_t s_sequence = 0;
+static uint32_t s_bootId = 0;
+static char s_displayPool[64] = {0};
+
+static advanced::Counters sessionCounters(const mining_stats_t& raw, uint64_t seconds) {
+    advanced::Counters c;
+    c.hashes = raw.hashes; c.submitted = raw.shares;
+    c.accepted = raw.accepted; c.rejected = raw.rejected; c.blocks = raw.blocks;
+    c.uptime_s = seconds > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(seconds);
+    c.best_difficulty = advanced::best(raw.bestDifficulty);
+    return c;
+}
 
 // ============================================================
 // Helper Functions
 // ============================================================
 
-static void updateDisplayData(display_data_t *data) {
-    // Get mining stats (current session)
-    mining_stats_t *mstats = miner_get_stats();
-
-    // Get persistent lifetime stats
-    mining_persistence_t *pstats = nvs_stats_get();
-
-    // Display lifetime totals (persistent + current session)
-    data->totalHashes = pstats->lifetimeHashes + mstats->hashes;
-    data->sharesAccepted = pstats->lifetimeAccepted + mstats->accepted;
-    data->sharesRejected = pstats->lifetimeRejected + mstats->rejected;
-    data->blocksFound = pstats->lifetimeBlocks + mstats->blocks;
-
-    // Best difficulty: max of lifetime best and current session best
-    data->bestDifficulty = (mstats->bestDifficulty > pstats->bestDifficultyEver)
-                           ? mstats->bestDifficulty : pstats->bestDifficultyEver;
-
-    // Session-only values (these make sense per-session)
+static void updateDisplayData(display_data_t *data, const mining_stats_t& raw,
+                              const advanced::Snapshot& snapshot) {
+    const mining_stats_t* mstats = &raw;
+    const auto& total = snapshot.lifetime;
+    data->sessionStats = snapshot.session;
+    data->lifetimeStats = snapshot.lifetime;
+    data->totalHashes = total.hashes;
+    data->sharesAccepted = total.accepted;
+    data->sharesRejected = total.rejected;
+    data->blocksFound = total.blocks;
+    data->bestDifficulty = total.best_difficulty;
+    data->sessionSuccessPercent = advanced::success_percent(snapshot.session);
+    data->totalSuccessPercent = advanced::success_percent(total);
     data->templates = mstats->templates;
     data->blocks32 = mstats->matches32;
-    data->uptimeSeconds = (millis() - s_startTime) / 1000;
+    data->uptimeSeconds = snapshot.session.uptime_s;
     data->avgLatency = mstats->avgLatency;
-
-    // Calculate hashrate with EMA smoothing
-    static uint64_t lastHashes = 0;
-    static uint32_t lastHashTime = 0;
-    static double smoothedHashRate = 0.0;
-    static bool firstSample = true;
-
-    uint32_t now = millis();
-    uint32_t elapsed = now - lastHashTime;
-
-    if (elapsed >= 1000) {
-        uint64_t deltaHashes = mstats->hashes - lastHashes;
-        double instantRate = (double)deltaHashes * 1000.0 / elapsed;
-
-        // Exponential moving average (alpha=0.15 for smooth but responsive updates)
-        // Lower alpha = smoother but slower to respond
-        // Higher alpha = more responsive but jumpier
-        const double alpha = 0.15;
-
-        if (firstSample) {
-            smoothedHashRate = instantRate;
-            firstSample = false;
-        } else {
-            smoothedHashRate = alpha * instantRate + (1.0 - alpha) * smoothedHashRate;
-        }
-
-        data->hashRate = smoothedHashRate;
-        lastHashes = mstats->hashes;
-        lastHashTime = now;
-    }
+    data->hashRate = snapshot.hashrate_hs;
 
     // Pool info
-    data->poolConnected = stratum_is_connected();
-    data->poolName = stratum_get_pool();
+    data->poolConnected = snapshot.pool_connected;
+    const char* activePool = stratum_get_pool();
+    if (!activePool || !activePool[0]) activePool = advanced::tcp_pool_host(nvs_config_get()->poolUrl);
+    strncpy(s_displayPool, activePool, sizeof(s_displayPool)-1);
+    s_displayPool[sizeof(s_displayPool)-1] = '\0';
+    data->poolName = s_displayPool;
 
     // Get pool difficulty from miner
     data->poolDifficulty = miner_get_difficulty();
 
     // Network info
-    data->wifiConnected = (WiFi.status() == WL_CONNECTED);
+    data->wifiConnected = snapshot.wifi_connected;
     data->wifiRssi = data->wifiConnected ? WiFi.RSSI() : 0;
     data->ipAddress = wifi_manager_get_ip();
 
@@ -115,7 +97,9 @@ static void updateDisplayData(display_data_t *data) {
 
     // Overwrite pool name if proxy provides a friendly one
     if (lstats.poolValid && strlen(lstats.poolName) > 0) {
-        data->poolName = lstats.poolName;
+        strncpy(s_displayPool, lstats.poolName, sizeof(s_displayPool)-1);
+        s_displayPool[sizeof(s_displayPool)-1] = '\0';
+        data->poolName = s_displayPool;
     }
 
     if (lstats.poolValid) {
@@ -185,6 +169,18 @@ void monitor_init() {
     mining_persistence_t *pstats = nvs_stats_get();
     Serial.printf("[MONITOR] Session #%lu | Lifetime: %llu hashes, %lu shares\n",
                   pstats->sessionCount, pstats->lifetimeHashes, pstats->lifetimeShares);
+    advanced::Counters boot;
+    boot.hashes = pstats->lifetimeHashes; boot.submitted = pstats->lifetimeShares;
+    boot.accepted = pstats->lifetimeAccepted; boot.rejected = pstats->lifetimeRejected;
+    boot.blocks = pstats->lifetimeBlocks; boot.uptime_s = pstats->totalUptimeSeconds;
+    boot.best_difficulty = pstats->bestDifficultyEver;
+    s_ledger = advanced::Ledger(boot);
+    s_clock.start(millis());
+    s_bootId = esp_random();
+    mining_stats_t initial;
+    miner_get_stats_copy(&initial);
+    s_rate.sample(initial.hashes, static_cast<uint64_t>(esp_timer_get_time()) / 1000);
+
 
     // Set wallet for pool stats
     miner_config_t *config = nvs_config_get();
@@ -195,8 +191,6 @@ void monitor_init() {
     // Note: display_init() is now called earlier in main.cpp
     // (before WiFi setup, so we can show AP config screen)
 
-    s_startTime = millis();
-    s_lastPersistSave = millis();
     s_lastActivityTime = millis();
     s_initialized = true;
 
@@ -219,6 +213,14 @@ void monitor_task(void *param) {
 
     while (true) {
         uint32_t now = millis();
+        uint64_t sessionSeconds = s_clock.tick(now);
+
+        #if (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
+        if (display_touched()) {
+            monitor_reset_activity();
+            display_handle_touch();
+        }
+        #endif
 
         // Update live stats periodically
         if (now - s_lastStatsUpdate >= STATS_UPDATE_MS) {
@@ -228,15 +230,29 @@ void monitor_task(void *param) {
 
         // Update display
         if (now - s_lastDisplayUpdate >= DISPLAY_UPDATE_MS) {
-            updateDisplayData(&displayData);
+            mining_stats_t raw;
+            miner_get_stats_copy(&raw);
+            // Fetches may have blocked; sample the clock after they finish.
+            now = millis();
+            sessionSeconds = s_clock.tick(now);
+            advanced::Snapshot snapshot;
+            snapshot.session = sessionCounters(raw, sessionSeconds);
+            snapshot.lifetime = s_ledger.total(snapshot.session);
+            snapshot.sampled_ms = static_cast<uint64_t>(esp_timer_get_time()) / 1000;
+            snapshot.sequence = ++s_sequence;
+            snapshot.boot_id = s_bootId;
+            snapshot.hashrate_hs = s_rate.sample(raw.hashes, snapshot.sampled_ms);
+            snapshot.pool_connected = stratum_is_connected();
+            snapshot.wifi_connected = WiFi.status() == WL_CONNECTED;
+            snapshot.save_attempted = s_saveAttempted;
+            snapshot.last_save_ok = s_lastSaveOk;
+            updateDisplayData(&displayData, raw, snapshot);
+            advanced_stats_publish(snapshot);
 
             #if (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
                 display_update(&displayData);
 
-                // Check for touch input
-                if (display_touched()) {
-                    display_handle_touch();
-                }
+
 
                 // Screen timeout check
                 {
@@ -278,9 +294,9 @@ void monitor_task(void *param) {
                 }
 
                 // DEBUG: Per-core hash contribution
-                extern volatile uint64_t s_core0Hashes;
-                extern volatile uint64_t s_core1Hashes;
-                Serial.printf("[STATS] Core0: %llu hashes, Core1: %llu hashes\n", s_core0Hashes, s_core1Hashes);
+                uint64_t core0, core1;
+                miner_get_stats_copy(nullptr, &core0, &core1);
+                Serial.printf("[STATS] Core0: %llu hashes, Core1: %llu hashes\n", core0, core1);
 
                 // Heap monitoring - track memory usage over time
                 uint32_t freeHeap = ESP.getFreeHeap();
@@ -322,7 +338,9 @@ void monitor_task(void *param) {
             }
 
             // Check for new share accepted - flash LED
-            mining_stats_t *ledStats = miner_get_stats();
+            mining_stats_t ledCopy;
+            miner_get_stats_copy(&ledCopy);
+            const mining_stats_t *ledStats = &ledCopy;
             if (ledStats->accepted > s_lastLedShareCount) {
                 led_status_share_found();
                 s_lastLedShareCount = ledStats->accepted;
@@ -343,55 +361,29 @@ void monitor_task(void *param) {
         }
         #endif
 
-        // Persistence save logic with early save for new sessions
-        // - Save on first accepted share (immediate feedback)
-        // - Save every 5 minutes until first hourly save
-        // - Save every hour after that (flash wear-leveling)
-        mining_stats_t *mstats = miner_get_stats();
-        bool shouldSave = false;
-        const char *saveReason = nullptr;
+        #ifdef ADVANCED_LOCAL_CONTROLS
+        mining_stats_t settingsRaw;
+        miner_get_stats_copy(&settingsRaw);
+        local_settings_process(s_ledger.total(sessionCounters(settingsRaw, s_clock.tick(millis()))));
+        #endif
 
-        // Check for first share save (one-time trigger)
-        if (!s_earlySaveDone && mstats->accepted > 0 && s_lastAcceptedCount == 0) {
-            shouldSave = true;
-            saveReason = "first share";
-            s_lastAcceptedCount = mstats->accepted;
-        }
-
-        // Check for periodic save (early interval or standard interval)
-        uint32_t saveInterval = s_earlySaveDone ? PERSIST_STATS_MS : EARLY_SAVE_MS;
-        if (now - s_lastPersistSave >= saveInterval) {
-            shouldSave = true;
-            saveReason = s_earlySaveDone ? "hourly" : "early";
-            if (!s_earlySaveDone) {
-                s_earlySaveDone = true;  // Switch to hourly saves after first early save
-            }
-        }
-
-        if (shouldSave) {
-            uint32_t sessionSeconds = (now - s_startTime) / 1000;
-
-            // Calculate session deltas (hashes added since last save)
-            uint64_t sessionHashes = mstats->hashes - s_sessionStartHashes;
-            uint32_t sessionShares = mstats->shares - s_sessionStartShares;
-            uint32_t sessionAccepted = mstats->accepted - s_sessionStartAccepted;
-            uint32_t sessionRejected = mstats->rejected - s_sessionStartRejected;
-            uint32_t sessionBlocks = mstats->blocks - s_sessionStartBlocks;
-
-            // Update persistent stats
-            nvs_stats_update(sessionHashes, sessionShares, sessionAccepted,
-                            sessionRejected, sessionBlocks, sessionSeconds,
-                            mstats->bestDifficulty);
-
-            // Update session start values for next delta calculation
-            s_sessionStartHashes = mstats->hashes;
-            s_sessionStartShares = mstats->shares;
-            s_sessionStartAccepted = mstats->accepted;
-            s_sessionStartRejected = mstats->rejected;
-            s_sessionStartBlocks = mstats->blocks;
-
-            Serial.printf("[MONITOR] Stats saved to NVS (%s)\n", saveReason);
-            s_lastPersistSave = now;
+        // Idempotent absolute checkpoints. Retry failures at most once per 30 s.
+        mining_stats_t current;
+        miner_get_stats_copy(&current);
+        sessionSeconds = s_clock.tick(millis());
+        if (s_savePolicy.due(sessionSeconds, current.accepted)
+            #ifdef ADVANCED_LOCAL_CONTROLS
+            && !local_settings_blocks_checkpoint()
+            #endif
+        ) {
+            const auto session = sessionCounters(current, sessionSeconds);
+            s_saveAttempted = true;
+            s_lastSaveOk = s_ledger.checkpoint(session, [](const advanced::Counters& total) {
+                return nvs_stats_store_totals(total);
+            });
+            s_savePolicy.result(sessionSeconds, current.accepted, s_lastSaveOk);
+            Serial.printf("[MONITOR] Absolute statistics checkpoint: %s\n",
+                          s_lastSaveOk ? "saved" : "failed; retry pending");
         }
 
         vTaskDelay(100 / portTICK_PERIOD_MS);

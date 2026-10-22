@@ -43,15 +43,14 @@
         #define USE_DISPLAY 1
     #endif
     #define DISPLAY_TYPE_TFT 1
-    // Undefine TFT dimensions if set by library, then set our values
-    #ifdef TFT_WIDTH
-        #undef TFT_WIDTH
+    // TFT_eSPI expects the native portrait dimensions; rotation is applied later.
+    // Preserve the selected board's build flags instead of replacing them.
+    #ifndef TFT_WIDTH
+        #define TFT_WIDTH 240
     #endif
-    #define TFT_WIDTH 320
-    #ifdef TFT_HEIGHT
-        #undef TFT_HEIGHT
+    #ifndef TFT_HEIGHT
+        #define TFT_HEIGHT 320
     #endif
-    #define TFT_HEIGHT 240
 
     // LED (RGB, active low)
     #ifndef LED_R_PIN

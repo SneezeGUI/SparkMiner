@@ -773,3 +773,7 @@ GPL v3 License - see [LICENSE](LICENSE) file for details.
 
 If you find a block, consider donating to support development:
 `bc1qkg83n8lek6cwk4mpad9hrvvun7q0u7nlafws9p`
+
+## Opt-in CYD ST7789 advanced statistics and SMTP
+
+A separate profile adds local display/browser statistics, settings, resistive touch and direct SMTP reports for the dual-USB ST7789 board. See [hardware, build, tests and known limitations](docs/CYD_ADVANCED.md). This profile does not change the default build environment.

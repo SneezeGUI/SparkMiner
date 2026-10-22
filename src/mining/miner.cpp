@@ -28,6 +28,19 @@
 #include "miner_sha256.h"  // BitsyMiner software SHA-256 (verification + Core 0)
 #include "../stratum/stratum.h"
 #include "board_config.h"
+#include <advanced_statistics.hpp>
+#ifdef ADVANCED_MAIL
+#include <mining_mail_gate.hpp>
+#include <mail_sha_guard.hpp>
+#include <sha/sha_parallel_engine.h>
+#include <hal/sha_hal.h>
+#if !defined(ADVANCED_FAST_KERNEL) || !defined(CONFIG_IDF_TARGET_ESP32)
+#error ADVANCED_MAIL requires the verified classic ESP32 fast-kernel configuration
+#endif
+#endif
+#if defined(ADVANCED_FAST_KERNEL) && defined(CONFIG_IDF_TARGET_ESP32)
+#include <advanced_fast_kernel.hpp>
+#endif
 
 // ============================================================
 // Constants
@@ -66,10 +79,49 @@ static double s_poolDifficulty = 1.0;
 
 // Statistics
 static mining_stats_t s_stats = {0};
+static portMUX_TYPE s_statsMux = portMUX_INITIALIZER_UNLOCKED;
 
-// DEBUG: Per-core hash counters to verify counting (non-static for extern access)
-volatile uint64_t s_core0Hashes = 0;
-volatile uint64_t s_core1Hashes = 0;
+// Per-core counters are published under the same lock as the aggregate.
+static uint64_t s_core0Hashes = 0;
+static uint64_t s_core1Hashes = 0;
+
+static void recordHashes(uint64_t count, unsigned core) {
+    if (!count) return;
+    portENTER_CRITICAL(&s_statsMux);
+    s_stats.hashes = advanced::add<uint64_t>(s_stats.hashes, count);
+    uint64_t& perCore = core == 0 ? s_core0Hashes : s_core1Hashes;
+    perCore = advanced::add<uint64_t>(perCore, count);
+    portEXIT_CRITICAL(&s_statsMux);
+}
+
+#ifdef ADVANCED_MAIL
+static advanced_fast::Kernel s_rawKernel=nullptr;
+struct MailShaMemory {
+ void lock(){esp_sha_lock_memory_block();}
+ void wait_idle(){sha_hal_wait_idle();}
+ void unlock(){esp_sha_unlock_memory_block();}
+};
+static uint32_t guardedMailKernel(volatile uint32_t*base,advanced_fast::Context*c){MailShaMemory memory;return mail::guarded_kernel(s_rawKernel,base,c,memory);}
+static mail::MiningGate s_mailGate;
+static volatile bool s_engineRun=false;
+static bool mailRequested(){portENTER_CRITICAL(&s_statsMux);bool yes=s_mailGate.requested;portEXIT_CRITICAL(&s_statsMux);return yes;}
+static bool claimMailCore(bool needJob){
+ portENTER_CRITICAL(&s_statsMux);
+ bool yes=(!needJob||s_miningActive)&&s_mailGate.claim();
+ if(yes)s_core1Mining=true;
+ portEXIT_CRITICAL(&s_statsMux);return yes;
+}
+static void finishMailCore(){portENTER_CRITICAL(&s_statsMux);s_mailGate.finish();s_core1Mining=false;portEXIT_CRITICAL(&s_statsMux);}
+bool miner_mail_pause(uint32_t timeoutMs){
+ portENTER_CRITICAL(&s_statsMux);bool yes=s_mailGate.request();if(yes)s_engineRun=false;portEXIT_CRITICAL(&s_statsMux);
+ if(!yes)return false;
+ uint32_t start=millis();
+ for(;;){portENTER_CRITICAL(&s_statsMux);bool safe=s_mailGate.safe();portEXIT_CRITICAL(&s_statsMux);if(safe)return true;
+  if(uint32_t(millis()-start)>=timeoutMs){miner_mail_resume();return false;}vTaskDelay(1);
+ }
+}
+void miner_mail_resume(){portENTER_CRITICAL(&s_statsMux);s_mailGate.resume();s_engineRun=s_miningActive;portEXIT_CRITICAL(&s_statsMux);}
+#endif
 
 // Nonce ranges for dual-core
 static unsigned long s_startNonce[2] = {0, 0x80000000};
@@ -279,11 +331,11 @@ static double getDifficulty(sha256_hash_t *ctx) {
 
 static void compareBestDifficulty(sha256_hash_t *ctx) {
     double difficulty = getDifficulty(ctx);
-    if (!isnan(difficulty) && !isinf(difficulty) &&
-        (isnan(s_stats.bestDifficulty) || isinf(s_stats.bestDifficulty) ||
-         difficulty >= s_stats.bestDifficulty)) {
+    portENTER_CRITICAL(&s_statsMux);
+    if (advanced::best(difficulty) > advanced::best(s_stats.bestDifficulty)) {
         s_stats.bestDifficulty = difficulty;
     }
+    portEXIT_CRITICAL(&s_statsMux);
 }
 
 // ============================================================
@@ -299,14 +351,18 @@ static void hashCheck(const char *jobId, sha256_hash_t *ctx, uint32_t timestamp,
         if (!ctx->hash[7]) {
             dbg("32-bit match\n");
             flags |= SUBMIT_FLAG_32BIT;
-            s_stats.matches32++;
+            portENTER_CRITICAL(&s_statsMux);
+            s_stats.matches32 = advanced::add<uint32_t>(s_stats.matches32, 1);
+            portEXIT_CRITICAL(&s_statsMux);
         }
 
         // Check against block target (lottery win!)
         if (check_target(ctx->bytes, s_blockTarget)) {
             Serial.println("[MINER] *** BLOCK SOLUTION FOUND! ***");
             flags |= SUBMIT_FLAG_BLOCK;
-            s_stats.blocks++;
+            portENTER_CRITICAL(&s_statsMux);
+            s_stats.blocks = advanced::add<uint32_t>(s_stats.blocks, 1);
+            portEXIT_CRITICAL(&s_statsMux);
         }
 
         double shareDiff = getDifficulty(ctx);
@@ -333,7 +389,7 @@ static void hashCheck(const char *jobId, sha256_hash_t *ctx, uint32_t timestamp,
         submission.difficulty = shareDiff;
 
         stratum_submit_share(&submission);
-        s_stats.shares++;
+        // Count submitted shares only after a successful Stratum send.
     }
 
     // Always track best difficulty for stats
@@ -407,6 +463,9 @@ void miner_start_job(const stratum_job_t *job) {
 
     // Wait for any active mining to stop
     s_miningActive = false;
+#ifdef ADVANCED_MAIL
+    s_engineRun=false;
+#endif
     while (s_core0Mining || s_core1Mining) {
         vTaskDelay(10 / portTICK_PERIOD_MS);
     }
@@ -452,23 +511,59 @@ void miner_start_job(const stratum_job_t *job) {
     s_startNonce[0] = esp_random();
     s_startNonce[1] = s_startNonce[0] + 0x80000000;
 
-    s_stats.templates++;
+    portENTER_CRITICAL(&s_statsMux);
+    s_stats.templates = advanced::add<uint32_t>(s_stats.templates, 1);
+    portEXIT_CRITICAL(&s_statsMux);
 
     xSemaphoreGive(s_jobMutex);
 
+#ifdef ADVANCED_MAIL
+    portENTER_CRITICAL(&s_statsMux);s_miningActive=true;s_engineRun=!s_mailGate.requested;portEXIT_CRITICAL(&s_statsMux);
+#else
     s_miningActive = true;
+#endif
 }
 
 void miner_stop() {
     s_miningActive = false;
+#ifdef ADVANCED_MAIL
+    s_engineRun=false;
+#endif
 }
 
 bool miner_is_running() {
     return s_miningActive;
 }
 
-mining_stats_t *miner_get_stats() {
-    return &s_stats;
+void miner_get_stats_copy(mining_stats_t* out, uint64_t* core0, uint64_t* core1) {
+    portENTER_CRITICAL(&s_statsMux);
+    if (out) memcpy(out, &s_stats, sizeof(s_stats));
+    if (core0) *core0 = s_core0Hashes;
+    if (core1) *core1 = s_core1Hashes;
+    portEXIT_CRITICAL(&s_statsMux);
+}
+
+static void recordLatencyUnlocked(uint32_t ms) {
+    s_stats.lastLatency = ms;
+    s_stats.avgLatency = s_stats.avgLatency == 0 ? ms :
+        (static_cast<uint64_t>(s_stats.avgLatency) * 9 + ms) / 10;
+}
+void miner_record_submitted() {
+    portENTER_CRITICAL(&s_statsMux);
+    s_stats.shares = advanced::add<uint32_t>(s_stats.shares, 1);
+    portEXIT_CRITICAL(&s_statsMux);
+}
+void miner_record_latency(uint32_t ms) {
+    portENTER_CRITICAL(&s_statsMux);
+    recordLatencyUnlocked(ms);
+    portEXIT_CRITICAL(&s_statsMux);
+}
+void miner_record_result(bool accepted, uint32_t ms) {
+    portENTER_CRITICAL(&s_statsMux);
+    recordLatencyUnlocked(ms);
+    if (accepted) s_stats.accepted = advanced::add<uint32_t>(s_stats.accepted, 1);
+    else s_stats.rejected = advanced::add<uint32_t>(s_stats.rejected, 1);
+    portEXIT_CRITICAL(&s_statsMux);
 }
 
 void miner_set_difficulty(double diff) {
@@ -493,6 +588,11 @@ void miner_set_extranonce(const char *extraNonce1, int extraNonce2Size) {
 // ============================================================
 
 void miner_task_core0(void *param) {
+#if defined(ADVANCED_FAST_KERNEL) && defined(CONFIG_IDF_TARGET_ESP32)
+    Serial.println("[FAST] Core 0 reserved for network/display; core 1 owns nonce space");
+    while (true) vTaskDelay(100 / portTICK_PERIOD_MS);
+#endif
+
     block_header_t hb;
     sha256_hash_t ctx;
     sha256_hash_t sw_midstate;  // Software midstate for fallback
@@ -500,6 +600,7 @@ void miner_task_core0(void *param) {
     char jobId[MAX_JOB_ID_LEN];
     uint32_t minerId = 0;
     uint32_t yieldCounter = 0;
+    uint32_t pendingHashes = 0;
     uint32_t hwHashes = 0;  // Track hardware SHA usage
     uint32_t swHashes = 0;  // Track software SHA usage
 
@@ -554,17 +655,20 @@ void miner_task_core0(void *param) {
                 hashCheck(jobId, &ctx, hb.timestamp, hb.nonce);
             }
             hb.nonce++;
-            s_stats.hashes++;
-            s_core0Hashes++;  // DEBUG: Track Core 0 contribution
+            pendingHashes++;
             yieldCounter++;
 
             // Yield every 256 hashes to let monitor/WiFi tasks run
             if (yieldCounter >= CORE_0_YIELD_COUNT) {
+                recordHashes(pendingHashes, 0);
+                pendingHashes = 0;
                 yieldCounter = 0;
                 vTaskDelay(1);  // Must use vTaskDelay(1), not taskYIELD()
             }
         }
 
+        recordHashes(pendingHashes, 0);
+        pendingHashes = 0;
         s_core0Mining = false;
         vTaskDelay(20 / portTICK_PERIOD_MS);
     }
@@ -623,9 +727,11 @@ void miner_task_core1(void *param) {
     Serial.printf("[MINER1] Started on core %d (PIPELINED ASM v3, priority %d)\n",
                   xPortGetCoreID(), uxTaskPriorityGet(NULL));
 
+#ifndef ADVANCED_MAIL
     // Enable SHA peripheral clock and clear reset
     DPORT_REG_SET_BIT(DPORT_PERI_CLK_EN_REG, DPORT_PERI_EN_SHA);
     DPORT_REG_CLR_BIT(DPORT_PERI_RST_EN_REG, DPORT_PERI_EN_SHA | DPORT_PERI_EN_SECUREBOOT);
+#endif
 
     // Wait for first job
     while (!s_miningActive) {
@@ -636,6 +742,59 @@ void miner_task_core1(void *param) {
     // SHA peripheral base address
     volatile uint32_t *sha_base = (volatile uint32_t *)0x3FF03000;  // SHA_TEXT_BASE
 
+#if defined(ADVANCED_FAST_KERNEL)
+    advanced_fast::Kernel fast = nullptr;
+#ifdef ADVANCED_MAIL
+    while(!claimMailCore(false))vTaskDelay(1);
+#else
+    s_core1Mining = true;  // Block job replacement while testing SHA.
+#endif
+    xSemaphoreTake(s_shaMutex, portMAX_DELAY);
+    s_core1HasSha = true;
+    sha256_ll_acquire();  // SDK enables SHA clock after job-construction mbedTLS releases it.
+    if (ESP.getChipRevision() >= 3 && ESP.getCpuFreqMHz() == 240) {
+        const advanced_fast::Kernel choices[] = {
+            pipelined_hw_mine_classic_v2,
+            pipelined_hw_mine_classic_v2_margin,
+            pipelined_hw_mine_classic_v2_wide
+        };
+        // SMTP's background task changes cross-core bus traffic. Keep a timing margin.
+#ifdef ADVANCED_MAIL
+        const unsigned firstVariant=1;
+#else
+        const unsigned firstVariant=0;
+#endif
+        for (unsigned i=firstVariant;i<3;++i) {
+            advanced_fast::Kernel selected=choices[i];
+#ifdef ADVANCED_MAIL
+            s_rawKernel=choices[i];selected=guardedMailKernel;
+#endif
+            advanced_fast::Diagnostic diagnostic;
+            // Require two consecutive complete passes, including under normal core-0 load.
+            if (advanced_fast::selftest(selected,sha_base,[](){vTaskDelay(1);},&diagnostic) &&
+                advanced_fast::selftest(selected,sha_base,[](){vTaskDelay(1);},&diagnostic)) {
+                fast=selected;
+                Serial.printf("[FAST] Known-answer tests passed: variant %u\n",i);
+                break;
+            }
+            Serial.printf("[FAST] KAT failed v%u reason=%u before=%08x after=%08x budget=%u hit=%u found=%u\n",i,diagnostic.reason,diagnostic.before,diagnostic.after,diagnostic.budget,diagnostic.hit,diagnostic.found);
+        }
+    }
+#ifdef ADVANCED_MAIL
+    if(!fast)Serial.println("[FAST] No hardware variant safe; using software fallback");
+#else
+    if (!fast) Serial.println("[FAST] Using previous v3 kernel");
+#endif
+    sha256_ll_release();
+    s_core1HasSha=false;
+    xSemaphoreGive(s_shaMutex);
+#ifdef ADVANCED_MAIL
+    finishMailCore();
+#else
+    s_core1Mining = false;
+#endif
+#endif
+
     while (true) {
         if (!s_miningActive) {
             s_core1HasSha = false;  // Release SHA indicator when not mining
@@ -643,7 +802,11 @@ void miner_task_core1(void *param) {
             continue;
         }
 
+#ifdef ADVANCED_MAIL
+        if(!claimMailCore(true)){vTaskDelay(1);continue;}
+#else
         s_core1Mining = true;
+#endif
 
         // Copy job data
         xSemaphoreTake(s_jobMutex, portMAX_DELAY);
@@ -669,6 +832,10 @@ void miner_task_core1(void *param) {
         xSemaphoreTake(s_shaMutex, portMAX_DELAY);
         s_core1HasSha = true;
 
+#if defined(ADVANCED_FAST_KERNEL)
+        sha256_ll_acquire();  // Keep SDK clock ownership throughout this job.
+#endif
+
         // Re-initialize SHA hardware before loop
         // Only re-init if SHA was actually disabled
         if (!(DPORT_REG_READ(DPORT_PERI_CLK_EN_REG) & DPORT_PERI_EN_SHA)) {
@@ -676,9 +843,82 @@ void miner_task_core1(void *param) {
             DPORT_REG_CLR_BIT(DPORT_PERI_RST_EN_REG, DPORT_PERI_EN_SHA | DPORT_PERI_EN_SECUREBOOT);
         }
 
+#if defined(ADVANCED_FAST_KERNEL)
+        advanced_fast::Context accelerated={};
+        memcpy(accelerated.hdr,header_swapped,sizeof(header_swapped));
+        accelerated.nonce=nonce_swapped;
+        accelerated.pad=0x80000000u;
+        accelerated.run=1;
+        uint64_t tried=0;
+#endif
         while (s_miningActive) {
-            // Track hash count before v3 call for per-core stats
-            uint64_t hashBefore = s_stats.hashes;
+#ifdef ADVANCED_MAIL
+            if(mailRequested()){
+                // Keep the header and next nonce on this stack: no duplicate search on resume.
+                sha256_ll_release();s_core1HasSha=false;xSemaphoreGive(s_shaMutex);
+                portENTER_CRITICAL(&s_statsMux);s_mailGate.park();portEXIT_CRITICAL(&s_statsMux);
+                while(mailRequested())vTaskDelay(1);
+                portENTER_CRITICAL(&s_statsMux);s_mailGate.leave_park();portEXIT_CRITICAL(&s_statsMux);
+                xSemaphoreTake(s_shaMutex,portMAX_DELAY);s_core1HasSha=true;sha256_ll_acquire();
+                continue;
+            }
+#endif
+#if defined(ADVANCED_FAST_KERNEL)
+            if (fast) {
+                // A complete nonce space is never counted twice for the same job.
+                const uint64_t left=(UINT64_C(1)<<32)-tried;
+                if (!left) {vTaskDelay(1);continue;}
+                const uint32_t budget=left<32768?static_cast<uint32_t>(left):32768;
+                accelerated.budget=budget;
+                const uint32_t before=accelerated.nonce;
+                const uint32_t hit=fast(sha_base,&accelerated);
+                if (hit>1 || accelerated.budget>=budget ||
+                    accelerated.nonce-before!=budget-accelerated.budget ||
+                    (!hit && accelerated.budget)) {
+                    #ifdef ADVANCED_MAIL
+                    Serial.println("[FAST] Invalid batch; using software fallback");
+#else
+                    Serial.println("[FAST] Invalid batch; reverting to v3");
+#endif
+                    fast=nullptr;
+                    nonce_swapped=before;
+                    continue;
+                }
+                const uint32_t done=budget-accelerated.budget;
+                tried+=done;
+                recordHashes(done,1);
+                nonce_swapped=accelerated.nonce;
+                if (hit && s_miningActive) {
+                    hbVerify.nonce=__builtin_bswap32(nonce_swapped-1);
+                    if (miner_sha256_header(&midstate,&ctx,&hbVerify)) {
+                        hashCheck(jobId,&ctx,hbVerify.timestamp,hbVerify.nonce);
+                    } else {
+                        #ifdef ADVANCED_MAIL
+                        Serial.println("[FAST] Candidate failed software verification; using software fallback");
+#else
+                        Serial.println("[FAST] Candidate failed software verification; reverting to v3");
+#endif
+                        fast=nullptr;
+                    }
+                }
+                // Yield at most once per ~34 ms of hashing, independent of hits.
+                vTaskDelay(1);
+                continue;
+            }
+#endif
+#ifdef ADVANCED_MAIL
+            if(!fast){
+                uint32_t done=0;
+                while(done<256&&s_miningActive&&!mailRequested()&&tried<(UINT64_C(1)<<32)){
+                    hbVerify.nonce=__builtin_bswap32(nonce_swapped++);
+                    if(miner_sha256_header(&midstate,&ctx,&hbVerify))hashCheck(jobId,&ctx,hbVerify.timestamp,hbVerify.nonce);
+                    ++done;++tried;
+                }
+                recordHashes(done,1);vTaskDelay(1);continue;
+            }
+#endif
+            // Private batch counter: the assembler never writes the shared aggregate.
+            uint64_t completedHashes = 0;
 
             // Run pipelined assembly mining loop v3 (working version)
             // NOTE: v4 midstate injection does NOT work on ESP32 - SHA_LOAD copies
@@ -687,12 +927,16 @@ void miner_task_core1(void *param) {
                 sha_base,
                 header_swapped,
                 &nonce_swapped,
-                &s_stats.hashes,
+                &completedHashes,
+#ifdef ADVANCED_MAIL
+                &s_engineRun
+#else
                 &s_miningActive
+#endif
             );
 
             // Track Core 1 hash contribution
-            s_core1Hashes += (s_stats.hashes - hashBefore);
+            recordHashes(completedHashes, 1);
 
             if (!s_miningActive) break;
 
@@ -731,10 +975,17 @@ void miner_task_core1(void *param) {
         }
 
         // Release SHA mutex when done
+#if defined(ADVANCED_FAST_KERNEL)
+        sha256_ll_release();
+#endif
         s_core1HasSha = false;
         xSemaphoreGive(s_shaMutex);
 
+#ifdef ADVANCED_MAIL
+        finishMailCore();
+#else
         s_core1Mining = false;
+#endif
         vTaskDelay(20 / portTICK_PERIOD_MS);
     }
 }
@@ -801,8 +1052,7 @@ void miner_task_core1(void *param) {
                 hashCheck(jobId, &ctx, hb.timestamp, hb.nonce);
             }
             hb.nonce++;
-            s_stats.hashes++;
-            s_core1Hashes++;
+            recordHashes(1, 1);
 
             // Yield periodically so WiFi/Stratum/monitor tasks run (prevents WDT)
             if (++yieldCounter >= CORE_0_YIELD_COUNT) {
@@ -928,8 +1178,7 @@ void miner_task_core1(void *param) {
             }
 
             hb.nonce++;
-            s_stats.hashes++;
-            s_core1Hashes++;
+            recordHashes(1, 1);
 
             // Single shared core: yield often so WiFi/Stratum/Monitor stay responsive.
             if ((++yieldCounter & 0x7FF) == 0) {

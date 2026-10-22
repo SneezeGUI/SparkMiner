@@ -39,7 +39,7 @@
 // Magic value for checksum validation
 #define CONFIG_MAGIC 0x5350524B  // "SPRK"
 
-static Preferences s_prefs;
+// Each operation owns a separate NVS handle (config and monitor run in different tasks).
 static miner_config_t s_config;
 static bool s_initialized = false;
 
@@ -468,17 +468,18 @@ void nvs_config_init() {
 }
 
 bool nvs_config_load(miner_config_t *config) {
+    Preferences prefs;
     Serial.printf("[NVS] Loading config (struct size: %d bytes)\n", sizeof(miner_config_t));
 
-    if (!s_prefs.begin(NVS_NAMESPACE, true)) {  // Read-only
+    if (!prefs.begin(NVS_NAMESPACE, true)) {  // Read-only
         Serial.println("[NVS] Failed to open namespace (may be first boot)");
         return false;
     }
 
-    size_t len = s_prefs.getBytesLength(NVS_KEY_CONFIG);
+    size_t len = prefs.getBytesLength(NVS_KEY_CONFIG);
     if (len == 0) {
         Serial.println("[NVS] No saved config found (first boot or erased)");
-        s_prefs.end();
+        prefs.end();
         return false;
     }
 
@@ -486,16 +487,16 @@ bool nvs_config_load(miner_config_t *config) {
         Serial.printf("[NVS] Config size mismatch: stored=%d, expected=%d\n", len, sizeof(miner_config_t));
         Serial.println("[NVS] Struct size changed - clearing old config");
         // Clear the old incompatible config
-        s_prefs.end();
-        if (s_prefs.begin(NVS_NAMESPACE, false)) {
-            s_prefs.remove(NVS_KEY_CONFIG);
-            s_prefs.end();
+        prefs.end();
+        if (prefs.begin(NVS_NAMESPACE, false)) {
+            prefs.remove(NVS_KEY_CONFIG);
+            prefs.end();
         }
         return false;
     }
 
-    size_t read = s_prefs.getBytes(NVS_KEY_CONFIG, config, sizeof(miner_config_t));
-    s_prefs.end();
+    size_t read = prefs.getBytes(NVS_KEY_CONFIG, config, sizeof(miner_config_t));
+    prefs.end();
 
     if (read != sizeof(miner_config_t)) {
         Serial.printf("[NVS] Failed to read config: read=%d, expected=%d\n", read, sizeof(miner_config_t));
@@ -519,19 +520,20 @@ bool nvs_config_load(miner_config_t *config) {
 }
 
 bool nvs_config_save(const miner_config_t *config) {
+    Preferences prefs;
     Serial.printf("[NVS] Saving config (%d bytes)...\n", sizeof(miner_config_t));
 
     // Calculate checksum
     miner_config_t configCopy = *config;
     configCopy.checksum = calculateChecksum(&configCopy);
 
-    if (!s_prefs.begin(NVS_NAMESPACE, false)) {  // Read-write
+    if (!prefs.begin(NVS_NAMESPACE, false)) {  // Read-write
         Serial.println("[NVS] ERROR: Failed to open namespace for writing");
         return false;
     }
 
-    size_t written = s_prefs.putBytes(NVS_KEY_CONFIG, &configCopy, sizeof(miner_config_t));
-    s_prefs.end();
+    size_t written = prefs.putBytes(NVS_KEY_CONFIG, &configCopy, sizeof(miner_config_t));
+    prefs.end();
 
     if (written != sizeof(miner_config_t)) {
         Serial.printf("[NVS] ERROR: Write failed - wrote %d of %d bytes\n", written, sizeof(miner_config_t));
@@ -624,20 +626,21 @@ static uint32_t calculateStatsChecksum(const mining_persistence_t *stats) {
 }
 
 bool nvs_stats_load(mining_persistence_t *stats) {
-    if (!s_prefs.begin(NVS_NAMESPACE, true)) {  // Read-only
+    Preferences prefs;
+    if (!prefs.begin(NVS_NAMESPACE, true)) {  // Read-only
         Serial.println("[NVS-STATS] Failed to open namespace");
         return false;
     }
 
-    size_t len = s_prefs.getBytesLength(NVS_KEY_STATS);
+    size_t len = prefs.getBytesLength(NVS_KEY_STATS);
     if (len != sizeof(mining_persistence_t)) {
         Serial.printf("[NVS-STATS] Stats size mismatch: %d vs %d\n", len, sizeof(mining_persistence_t));
-        s_prefs.end();
+        prefs.end();
         return false;
     }
 
-    size_t read = s_prefs.getBytes(NVS_KEY_STATS, stats, sizeof(mining_persistence_t));
-    s_prefs.end();
+    size_t read = prefs.getBytes(NVS_KEY_STATS, stats, sizeof(mining_persistence_t));
+    prefs.end();
 
     if (read != sizeof(mining_persistence_t)) {
         Serial.println("[NVS-STATS] Failed to read stats");
@@ -655,9 +658,9 @@ bool nvs_stats_load(mining_persistence_t *stats) {
     if (stats->checksum != expected) {
         Serial.printf("[NVS-STATS] Checksum mismatch: %08x vs %08x - clearing corrupted data\n", stats->checksum, expected);
         // Clear corrupted stats from NVS
-        if (s_prefs.begin(NVS_NAMESPACE, false)) {
-            s_prefs.remove(NVS_KEY_STATS);
-            s_prefs.end();
+        if (prefs.begin(NVS_NAMESPACE, false)) {
+            prefs.remove(NVS_KEY_STATS);
+            prefs.end();
         }
         memset(stats, 0, sizeof(mining_persistence_t));
         return false;
@@ -669,6 +672,7 @@ bool nvs_stats_load(mining_persistence_t *stats) {
 }
 
 bool nvs_stats_save(const mining_persistence_t *stats) {
+    Preferences prefs;
     // Create zero-initialized copy to avoid padding byte issues
     mining_persistence_t statsCopy;
     memset(&statsCopy, 0, sizeof(mining_persistence_t));
@@ -685,13 +689,13 @@ bool nvs_stats_save(const mining_persistence_t *stats) {
     statsCopy.magic = STATS_MAGIC;
     statsCopy.checksum = calculateStatsChecksum(&statsCopy);
 
-    if (!s_prefs.begin(NVS_NAMESPACE, false)) {  // Read-write
+    if (!prefs.begin(NVS_NAMESPACE, false)) {  // Read-write
         Serial.println("[NVS-STATS] Failed to open namespace for writing");
         return false;
     }
 
-    size_t written = s_prefs.putBytes(NVS_KEY_STATS, &statsCopy, sizeof(mining_persistence_t));
-    s_prefs.end();
+    size_t written = prefs.putBytes(NVS_KEY_STATS, &statsCopy, sizeof(mining_persistence_t));
+    prefs.end();
 
     if (written != sizeof(mining_persistence_t)) {
         Serial.println("[NVS-STATS] Failed to write stats");
@@ -743,26 +747,29 @@ mining_persistence_t* nvs_stats_get() {
     return &s_persistentStats;
 }
 
-void nvs_stats_update(uint64_t currentHashes, uint32_t currentShares,
-                      uint32_t currentAccepted, uint32_t currentRejected,
-                      uint32_t currentBlocks, uint32_t sessionSeconds,
-                      double bestDiff) {
-    // Get current persistent stats
-    mining_persistence_t *stats = nvs_stats_get();
+bool nvs_stats_store_totals(const advanced::Counters& total) {
+    // Construct a candidate without mutating the last successful in-memory checkpoint.
+    mining_persistence_t next = *nvs_stats_get();
+    next.lifetimeHashes = total.hashes;
+    next.lifetimeShares = total.submitted;
+    next.lifetimeAccepted = total.accepted;
+    next.lifetimeRejected = total.rejected;
+    next.lifetimeBlocks = total.blocks;
+    next.totalUptimeSeconds = total.uptime_s;
+    next.bestDifficultyEver = total.best_difficulty;
+    return nvs_stats_save(&next);
+}
 
-    // Add current session values to lifetime totals
-    stats->lifetimeHashes += currentHashes;
-    stats->lifetimeShares += currentShares;
-    stats->lifetimeAccepted += currentAccepted;
-    stats->lifetimeRejected += currentRejected;
-    stats->lifetimeBlocks += currentBlocks;
-    stats->totalUptimeSeconds += sessionSeconds;
-
-    // Track best difficulty ever
-    if (bestDiff > stats->bestDifficultyEver) {
-        stats->bestDifficultyEver = bestDiff;
-    }
-
-    // Save to NVS
-    nvs_stats_save(stats);
+bool nvs_touch_enabled() {
+    Preferences prefs;
+    if(!prefs.begin(NVS_NAMESPACE,true)) return true;
+    bool enabled=prefs.getBool("touch",true);prefs.end();return enabled;
+}
+bool nvs_touch_save(bool enabled) {
+    Preferences prefs;if(!prefs.begin(NVS_NAMESPACE,false))return false;
+    bool ok=prefs.putBool("touch",enabled)==1;prefs.end();return ok;
+}
+bool nvs_factory_clear() {
+    Preferences prefs;if(!prefs.begin(NVS_NAMESPACE,false))return false;
+    bool ok=prefs.clear();prefs.end();return ok;
 }

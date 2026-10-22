@@ -1,0 +1,17 @@
+{
+  "certifi": "2026.10.19",
+  "cryptography_build_only": "50.0.2",
+  "mozilla_roots": 120,
+  "bundle_sha256": "2592d18a6d6369d7ae1535d4e09ed5f2cf469661c4062891eb3c3207e58a5605",
+  "pem_sha256": "50f79f98dac192b20dbf73f35c56f0b0c557ab267ff5199d1117cc1180b70785",
+  "generator": "https://raw.githubusercontent.com/espressif/esp-idf/v4.4.6/components/mbedtls/esp_crt_bundle/gen_crt_bundle.py",
+  "generator_sha256": "1e8f0dc9ff99e20d888fd5a9cab621e302acf55111c52dbe19ca92bf2bcd3020",
+  "bundle_bytes": 55354,
+  "gmail_pem_roots": [
+    "GTS Root R1",
+    "GTS Root R3",
+    "GTS Root R4"
+  ],
+  "gmail_pem_sha256": "f5fbd2bebec5f41a9b7d15160838b604874f3c2a689e0836be206345bed923fa",
+  "gmail_verification": "Standard mbedTLS CA chain and hostname verification; no bundle callback for smtp.gmail.com."
+}

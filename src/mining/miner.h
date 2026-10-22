@@ -48,7 +48,11 @@ bool miner_is_running();
 /**
  * Get current mining statistics
  */
-mining_stats_t* miner_get_stats();
+// Coherent copy; no mutable statistics pointer escapes to other tasks.
+void miner_get_stats_copy(mining_stats_t* out, uint64_t* core0 = nullptr, uint64_t* core1 = nullptr);
+void miner_record_submitted();
+void miner_record_result(bool accepted, uint32_t latency_ms);
+void miner_record_latency(uint32_t latency_ms);
 
 /**
  * Mining task for Core 0 (software SHA, lower priority)
@@ -86,3 +90,9 @@ double miner_get_difficulty();
 void miner_set_extranonce(const char *extraNonce1, int extraNonce2Size);
 
 #endif // MINER_H
+
+#ifdef ADVANCED_MAIL
+// Wait until SHA is released; false means no TLS operation may start.
+bool miner_mail_pause(uint32_t timeoutMs=5000);
+void miner_mail_resume();
+#endif
