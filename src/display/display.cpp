@@ -10,6 +10,7 @@
 #include <math.h>
 #include <board_config.h>
 #include "display.h"
+#include "../api/web_api.h"
 
 #if USE_DISPLAY
 
@@ -75,11 +76,18 @@
     #define LINE_HEIGHT     18
     #define HEADER_HEIGHT   30
     #define SMALL_DISPLAY   1
+    // 170x320 panel: the stock screens overflow, use the dedicated layout
+    // in display_compact.h (landscape + portrait)
+    #define COMPACT_UI      1
 #else
     #define MARGIN          10
     #define LINE_HEIGHT     22
     #define HEADER_HEIGHT   40
     #define SMALL_DISPLAY   0
+#endif
+
+#ifndef COMPACT_UI
+    #define COMPACT_UI      0
 #endif
 
 // ============================================================
@@ -101,6 +109,20 @@ static uint8_t s_rotation = 1;  // Current rotation (0-3)
 static bool s_needsRedraw = true;
 static bool s_backlightOff = false;
 static display_data_t s_lastData;
+
+// The button task draws the reset countdown while the monitor task refreshes
+// the screen. The mutex keeps the two off the panel bus at the same time; the
+// overlay flag stops the regular refresh from painting over the countdown.
+static SemaphoreHandle_t s_drawMutex = NULL;
+static volatile bool s_overlayActive = false;
+
+static void drawLock() {
+    if (s_drawMutex) xSemaphoreTake(s_drawMutex, portMAX_DELAY);
+}
+
+static void drawUnlock() {
+    if (s_drawMutex) xSemaphoreGive(s_drawMutex);
+}
 
 // ============================================================
 // Helper Functions
@@ -262,6 +284,42 @@ static int getMajorVersion() {
     if (ver[0] == 'v' || ver[0] == 'V') ver++;
     return atoi(ver);
 }
+
+// ============================================================
+// Compact layout (170x320 panels)
+// ============================================================
+
+#if COMPACT_UI
+#include "display_compact.h"
+
+// A full-frame sprite gives flicker-free updates but needs w*h*2 bytes
+// (~109 KB for 170x320), so it is only used when PSRAM is present.
+// Recreated automatically when the rotation changes the frame size.
+static bool compactEnsureFrame() {
+    if (!psramFound()) return false;
+    if (s_sprite.created() &&
+        s_sprite.width() == s_tft.width() && s_sprite.height() == s_tft.height()) {
+        return true;
+    }
+    s_sprite.deleteSprite();
+    s_sprite.setColorDepth(16);
+    return s_sprite.createSprite(s_tft.width(), s_tft.height()) != nullptr;
+}
+
+static void compactRender(const display_data_t *data) {
+    const char *host = web_api_is_running() ? web_api_get_hostname() : NULL;
+
+    if (compactEnsureFrame()) {
+        s_sprite.fillSprite(COLOR_BG);
+        cuiDrawFrame(s_sprite, s_currentScreen, data, host);
+        s_sprite.pushSprite(0, 0);
+    } else {
+        // No PSRAM: draw straight to the panel (visible redraw, but works)
+        s_tft.fillScreen(COLOR_BG);
+        cuiDrawFrame(s_tft, s_currentScreen, data, host);
+    }
+}
+#endif // COMPACT_UI
 
 // ============================================================
 // Screen Drawing Functions
@@ -429,7 +487,7 @@ static void drawMiningScreen(const display_data_t *data) {
     String shares = String(data->sharesAccepted) + "/" + String(data->sharesAccepted + data->sharesRejected);
     s_tft.print(shares);
 
-    y += 44;
+    y += isPortrait ? 44 : 40;     // Landscape: 240 px high, keep the LAN panel on screen
 
     s_tft.setTextSize(1);
 
@@ -467,7 +525,7 @@ static void drawMiningScreen(const display_data_t *data) {
     }
 
     int gridRows = isPortrait ? 3 : 2;
-    y += gridRows * (LINE_HEIGHT + 12) + 8;
+    y += gridRows * (LINE_HEIGHT + 12) + (isPortrait ? 8 : 2);
 
     // Pool info panel
     s_tft.fillRoundRect(MARGIN - 4, y, w - 2*MARGIN + 8, 50, 4, COLOR_PANEL);
@@ -530,7 +588,7 @@ static void drawMiningScreen(const display_data_t *data) {
     s_tft.setTextColor(COLOR_FG);
     s_tft.print(data->blockHeight > 0 ? String(data->blockHeight) : "---");
 
-    y += 22;
+    y += isPortrait ? 22 : 18;
 
     // LAN Info panel
     s_tft.fillRoundRect(MARGIN - 4, y, w - 2*MARGIN + 8, 24, 4, COLOR_PANEL);
@@ -760,6 +818,8 @@ void display_init(uint8_t rotation, uint8_t brightness) {
         delay(10);  // Allow power to stabilize
     #endif
 
+    if (!s_drawMutex) s_drawMutex = xSemaphoreCreateMutex();
+
     // Initialize TFT
     s_tft.init();
     s_rotation = rotation;
@@ -898,6 +958,23 @@ void display_update(const display_data_t *data) {
 
     if (!s_needsRedraw && !dataChanged && !statusChanged) return;
 
+    drawLock();
+
+    // Reset countdown owns the screen until display_redraw() releases it
+    if (s_overlayActive) {
+        drawUnlock();
+        return;
+    }
+
+    #if COMPACT_UI
+        // Compact layout renders a complete frame per update
+        compactRender(data);
+        memcpy(&s_lastData, data, sizeof(display_data_t));
+        s_needsRedraw = false;
+        drawUnlock();
+        return;
+    #endif
+
     // Full screen clear only on screen change
     if (s_needsRedraw) {
         s_tft.fillScreen(COLOR_BG);
@@ -928,6 +1005,7 @@ void display_update(const display_data_t *data) {
     // Save last data
     memcpy(&s_lastData, data, sizeof(display_data_t));
     s_needsRedraw = false;
+    drawUnlock();
 }
 
 void display_set_brightness(uint8_t brightness) {
@@ -952,25 +1030,30 @@ void display_next_screen() {
 }
 
 void display_redraw() {
+    s_overlayActive = false;    // Hand the screen back to the regular refresh
     s_needsRedraw = true;
 }
 
 uint8_t display_flip_rotation() {
     // Cycle all 4 rotations: 0->1->2->3->0
+    drawLock();
     s_rotation = (s_rotation + 1) % 4;
     s_tft.setRotation(s_rotation);
     s_tft.fillScreen(COLOR_BG);
     s_needsRedraw = true;
+    drawUnlock();
     Serial.printf("[DISPLAY] Screen rotated, rotation=%d\n", s_rotation);
     return s_rotation;
 }
 
 void display_set_rotation(uint8_t rotation) {
     if (rotation > 3) rotation = 0;
+    drawLock();
     s_rotation = rotation;
     s_tft.setRotation(s_rotation);
     s_tft.fillScreen(COLOR_BG);
     s_needsRedraw = true;
+    drawUnlock();
     Serial.printf("[DISPLAY] Rotation set to %d\n", s_rotation);
 }
 
@@ -983,6 +1066,8 @@ void display_set_inverted(bool inverted) {
 }
 
 void display_show_reset_countdown(int seconds) {
+    s_overlayActive = true;
+    drawLock();
     s_tft.fillScreen(COLOR_BG);
     int w = s_tft.width();
     int h = s_tft.height();
@@ -1001,9 +1086,12 @@ void display_show_reset_countdown(int seconds) {
     s_tft.setTextColor(COLOR_DIM);  // Dim
     s_tft.setCursor(w/2 - 65, h/2 + 60);
     s_tft.print("Release button to cancel");
+    drawUnlock();
 }
 
 void display_show_reset_complete() {
+    s_overlayActive = true;
+    drawLock();
     s_tft.fillScreen(COLOR_BG);
     int w = s_tft.width();
     int h = s_tft.height();
@@ -1012,6 +1100,7 @@ void display_show_reset_complete() {
     s_tft.setTextSize(2);
     s_tft.setCursor(w/2 - 65, h/2 - 10);
     s_tft.print("Resetting...");
+    drawUnlock();
 }
 
 bool display_touched() {
@@ -1027,6 +1116,12 @@ void display_handle_touch() {
 
 void display_show_ap_config(const char *ssid, const char *password, const char *ip) {
     s_tft.fillScreen(COLOR_BG);
+
+    #if COMPACT_UI
+        cuiDrawApConfig(s_tft, ssid, password, ip);
+        return;
+    #endif
+
     int w = s_tft.width();
 
     s_tft.setTextColor(COLOR_ACCENT);

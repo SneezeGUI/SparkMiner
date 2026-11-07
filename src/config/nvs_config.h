@@ -153,4 +153,45 @@ void nvs_stats_update(uint64_t currentHashes, uint32_t currentShares,
                       uint32_t currentBlocks, uint32_t sessionSeconds,
                       double bestDiff);
 
+// ============================================================
+// Local Stats API settings (Issue #12)
+// Stored as separate NVS keys (not in miner_config_t) so enabling the
+// feature does not change the config blob layout and existing
+// configurations survive the firmware update.
+// ============================================================
+
+// Build-time default when the key has never been written (upstream: OFF)
+#ifndef SPARKMINER_API_DEFAULT
+    #define SPARKMINER_API_DEFAULT 0
+#endif
+
+/** Local HTTP stats API enabled? */
+bool nvs_api_enabled();
+
+/** Expose the full wallet address in API responses? (default: masked) */
+bool nvs_api_expose_wallet();
+
+/** Persist local stats API settings */
+bool nvs_api_save(bool enabled, bool exposeWallet);
+
+// ============================================================
+// Web settings page (separate NVS keys, same reasoning as above)
+// ============================================================
+
+/** Password for the /settings page (default: setup hotspot password) */
+void nvs_web_password_get(char *out, size_t outLen);
+bool nvs_web_password_set(const char *password);
+
+/**
+ * WiFi credentials that worked before a change made on the settings page.
+ * Boot falls back to them if the new network cannot be joined, then clears
+ * them once a connection with the new credentials has succeeded.
+ */
+bool nvs_wifi_prev_save(const char *ssid, const char *password);
+bool nvs_wifi_prev_load(char *ssid, size_t ssidLen, char *password, size_t passLen);
+void nvs_wifi_prev_clear();
+
+/** Erase every SparkMiner setting (config, stats, API keys) */
+void nvs_factory_reset();
+
 #endif // NVS_CONFIG_H

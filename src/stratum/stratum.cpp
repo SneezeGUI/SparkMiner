@@ -12,6 +12,7 @@
 #include <board_config.h>
 #include "stratum.h"
 #include "../mining/miner.h"
+#include "../api/web_api.h"
 #include "../config/nvs_config.h"  // WiFi credentials for explicit reconnect (Issue #31)
 
 // ============================================================ 
@@ -244,6 +245,14 @@ static void parseMiningNotify(const String &line) {
     miner_start_job(&job);
 }
 
+// Event log: every pool message except mining.notify (too long, too frequent).
+// Call after a successful parse into s_doc.
+static void logRxLine(const String &line) {
+    const char *method = s_doc["method"] | "";
+    if (strcmp(method, "mining.notify") == 0) return;
+    web_api_log("RX %.110s", line.c_str());
+}
+
 static void parseSetDifficulty(const String &line) {
     if (!s_doc.containsKey("params")) return;
 
@@ -267,8 +276,10 @@ static void handleServerMessage(WiFiClient &client) {
     DeserializationError err = deserializeJson(s_doc, line);
     if (err) {
         dbg("[STRATUM] Parse error: %s\n", err.c_str());
+        web_api_log("RX parse error %s (%u bytes): %.60s", err.c_str(), (unsigned)line.length(), line.c_str());
         return;
     }
+    logRxLine(line);
 
     // Check for submission responses
     if (s_doc.containsKey("id") && s_doc.containsKey("result")) {
@@ -342,8 +353,10 @@ static bool waitForResponseById(WiFiClient &client, uint32_t expectedId, String 
         DeserializationError err = deserializeJson(s_doc, line);
         if (err) {
             Serial.printf("[STRATUM] JSON parse error: %s\n", err.c_str());
+            web_api_log("RX parse error %s (%u bytes): %.60s", err.c_str(), (unsigned)line.length(), line.c_str());
             continue;
         }
+        logRxLine(line);
 
         // Check if this is a method call (id is null or missing, has "method" field)
         if (s_doc.containsKey("method")) {
@@ -389,6 +402,7 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
 
     uint32_t startSub = millis();
     if (!sendMessage(client, msg)) return false;
+    web_api_log("TX %.110s", msg);
 
     // Small delay to allow server to process (like NerdMiner)
     vTaskDelay(200 / portTICK_PERIOD_MS);
@@ -417,6 +431,7 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
         "{\"id\":%lu,\"method\":\"mining.suggest_difficulty\",\"params\":[%.10g]}",
         diffId, DESIRED_DIFFICULTY);
     sendMessage(client, msg);
+    web_api_log("TX %.110s", msg);
 
     // Mining.authorize - append worker name if set
     char fullUsername[MAX_WALLET_LEN + 34];
@@ -436,6 +451,7 @@ static bool subscribe(WiFiClient &client, const char *wallet, const char *passwo
 
     uint32_t startAuth = millis();
     if (!sendMessage(client, msg)) return false;
+    web_api_log("TX mining.authorize id=%lu (user hidden)", (unsigned long)authId);
 
     // Small delay before reading
     vTaskDelay(200 / portTICK_PERIOD_MS);
@@ -482,6 +498,8 @@ static void submitShare(WiFiClient &client, const submit_entry_t *entry) {
 
     Serial.printf("[STRATUM] Submit: job=%s en2=%s time=%s nonce=%s\n",
         entry->jobId, entry->extraNonce2, timestamp, nonce);
+    web_api_log("TX mining.submit id=%lu job=%s en2=%s time=%s nonce=%s",
+        (unsigned long)msgId, entry->jobId, entry->extraNonce2, timestamp, nonce);
 
     if (sendMessage(client, msg)) {
         // Store in pending responses for latency tracking
@@ -600,6 +618,7 @@ void stratum_task(void *param) {
 
             Serial.printf("[STRATUM] Connecting to %s:%d...\n",
                 s_primaryPool.url, s_primaryPool.port);
+            web_api_log("STRATUM connecting to %.60s:%d", s_primaryPool.url, s_primaryPool.port);
 
             // STABILITY FIX: Use connect timeout (10s) to prevent long blocks
             if (client.connect(s_primaryPool.url, s_primaryPool.port, 10000)) {
@@ -608,11 +627,14 @@ void stratum_task(void *param) {
                     s_lastActivity = millis();
                     safeStrCpy(s_currentPoolUrl, s_primaryPool.url, MAX_POOL_URL_LEN);
                     Serial.println("[STRATUM] Connected to primary pool");
+                    web_api_log("STRATUM connected to %.60s:%d", s_primaryPool.url, s_primaryPool.port);
                 } else {
+                    web_api_log("STRATUM handshake with %.60s failed (subscribe/authorize)", s_primaryPool.url);
                     client.stop();
                 }
             } else {
                 Serial.println("[STRATUM] Connection failed");
+                web_api_log("STRATUM connect to %.60s:%d failed (DNS or TCP)", s_primaryPool.url, s_primaryPool.port);
 
                 // Try backup pool after 30s of failures
                 if (s_hasBackupPool && (millis() - lastConnectAttempt > POOL_FAILOVER_MS)) {
@@ -628,6 +650,7 @@ void stratum_task(void *param) {
                             s_lastActivity = millis();
                             safeStrCpy(s_currentPoolUrl, s_backupPool.url, MAX_POOL_URL_LEN);
                             Serial.println("[STRATUM] Connected to backup pool");
+                            web_api_log("STRATUM connected to backup %.60s:%d", s_backupPool.url, s_backupPool.port);
                         } else {
                             client.stop();
                         }
@@ -692,6 +715,7 @@ void stratum_task(void *param) {
         // Check for inactivity
         if (millis() - s_lastActivity > INACTIVITY_MS) {
             Serial.println("[STRATUM] Pool inactive, disconnecting");
+            web_api_log("STRATUM pool inactive, disconnecting");
             miner_stop();
             client.stop();
             s_isConnected = false;
@@ -724,8 +748,27 @@ const char* stratum_get_pool() {
     return s_currentPoolUrl;
 }
 
+// Accepts "host", "host:port" and "stratum+tcp://host:port" and stores a
+// bare host name; a port inside the URL wins over the separate port field.
+static void setPoolHost(char *dest, int *port, const char *url) {
+    const char *p = url ? url : "";
+    const char *scheme = strstr(p, "://");
+    if (scheme) p = scheme + 3;
+    while (*p == ' ' || *p == '\t') p++;
+    size_t n = 0;
+    while (p[n] && p[n] != ':' && p[n] != '/' && p[n] != ' ' && n < MAX_POOL_URL_LEN - 1) {
+        dest[n] = p[n];
+        n++;
+    }
+    dest[n] = '\0';
+    if (p[n] == ':') {
+        int urlPort = atoi(p + n + 1);
+        if (urlPort > 0 && urlPort <= 65535) *port = urlPort;
+    }
+}
+
 void stratum_set_pool(const char *url, int port, const char *wallet, const char *password, const char *workerName) {
-    safeStrCpy(s_primaryPool.url, url, MAX_POOL_URL_LEN);
+    setPoolHost(s_primaryPool.url, &port, url);
     s_primaryPool.port = port;
     safeStrCpy(s_primaryPool.wallet, wallet, MAX_WALLET_LEN);
     safeStrCpy(s_primaryPool.password, password, MAX_PASSWORD_LEN);
@@ -737,7 +780,7 @@ void stratum_set_pool(const char *url, int port, const char *wallet, const char 
 }
 
 void stratum_set_backup_pool(const char *url, int port, const char *wallet, const char *password, const char *workerName) {
-    safeStrCpy(s_backupPool.url, url, MAX_POOL_URL_LEN);
+    setPoolHost(s_backupPool.url, &port, url);
     s_backupPool.port = port;
     safeStrCpy(s_backupPool.wallet, wallet, MAX_WALLET_LEN);
     safeStrCpy(s_backupPool.password, password, MAX_PASSWORD_LEN);
@@ -746,5 +789,5 @@ void stratum_set_backup_pool(const char *url, int port, const char *wallet, cons
     } else {
         s_backupPool.workerName[0] = '\0';
     }
-    s_hasBackupPool = (url[0] && port > 0 && wallet[0]);
+    s_hasBackupPool = (s_backupPool.url[0] && port > 0 && wallet[0]);
 }

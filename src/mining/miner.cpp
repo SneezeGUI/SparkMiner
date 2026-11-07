@@ -27,6 +27,7 @@
 #include "sha256_pipelined_s3.h"  // Pipelined assembly mining (Core 1) - ESP32-S3
 #include "miner_sha256.h"  // BitsyMiner software SHA-256 (verification + Core 0)
 #include "../stratum/stratum.h"
+#include "../api/web_api.h"
 #include "board_config.h"
 
 // ============================================================
@@ -311,6 +312,7 @@ static void hashCheck(const char *jobId, sha256_hash_t *ctx, uint32_t timestamp,
 
         double shareDiff = getDifficulty(ctx);
         Serial.printf("[MINER] Share found! Diff: %.4f (pool: %.4f) Nonce: %08x\n", shareDiff, s_poolDifficulty, nonce);
+        web_api_log("MINER share found diff=%.6g pool=%.6g nonce=%08x", shareDiff, s_poolDifficulty, (unsigned)nonce);
 
         // Debug logging for share validation (Issue #5 investigation)
         #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(DEBUG_SHARE_VALIDATION)
@@ -476,6 +478,7 @@ void miner_set_difficulty(double diff) {
         s_poolDifficulty = diff;
         setPoolTarget();
         Serial.printf("[MINER] Pool difficulty set to: %.6f\n", diff);
+        web_api_log("MINER pool difficulty set to %.8g", diff);
     }
 }
 

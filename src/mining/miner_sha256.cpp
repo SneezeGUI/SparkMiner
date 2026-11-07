@@ -268,7 +268,18 @@ void miner_sha256_midstate(sha256_hash_t *ctx, block_header_t *hb) {
     ctx->hash[7] += h;
 }
 
-bool miner_sha256_header(sha256_hash_t *midpoint, sha256_hash_t *ctx, block_header_t *hb) {
+// ESP32-S3: the hot path of this function is ~20 KB of straight-line code,
+// which does not fit the 16 KB instruction cache. Executed from flash, every
+// nonce re-reads most of the function over SPI (~1.3 KH/s total on both
+// cores). Running it from internal RAM bypasses the cache entirely.
+// Classic ESP32 keeps it in flash: its IRAM is too tight for another 22 KB.
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+    #define MINER_SHA_HOT_ATTR IRAM_ATTR
+#else
+    #define MINER_SHA_HOT_ATTR
+#endif
+
+bool MINER_SHA_HOT_ATTR miner_sha256_header(sha256_hash_t *midpoint, sha256_hash_t *ctx, block_header_t *hb) {
     sha256_hash_t tmp;
     WORD temp1, temp2;
     uint8_t *data = (uint8_t *)hb;
