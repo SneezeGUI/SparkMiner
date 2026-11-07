@@ -34,6 +34,7 @@ extern "C" {
 #include "config/wifi_manager.h"
 #include "stats/monitor.h"
 #include "display/display.h"
+#include "api/web_api.h"
 
 // Task handles
 TaskHandle_t miner0Task = NULL;
@@ -48,6 +49,20 @@ volatile bool systemReady = false;
 // Button handling (OneButton)
 #if defined(BUTTON_PIN) && (USE_DISPLAY || USE_OLED_DISPLAY || USE_EINK_DISPLAY)
 OneButton button(BUTTON_PIN, true, true);  // active low, enable pullup
+
+// Optional second button (e.g. LILYGO T-Display S3, GPIO14): display on/off
+#if defined(BUTTON2_PIN) && defined(LILYGO_T_DISPLAY_S3)
+OneButton button2(BUTTON2_PIN, true, true);
+
+void onButton2Click() {
+    monitor_reset_activity();
+    if (display_is_backlight_off()) {
+        display_set_backlight_on();
+    } else {
+        display_set_backlight_off();
+    }
+}
+#endif
 
 // Single click: wake screen if off, otherwise cycle screens
 void onButtonClick() {
@@ -89,7 +104,11 @@ void onButtonMultiClick() {
         config->invertColors = !config->invertColors;
         display_set_inverted(config->invertColors);
         nvs_config_save(config);
-        Serial.printf("[BUTTON] Theme switched to %s mode\n", config->invertColors ? "Dark" : "Light");
+        #if defined(LILYGO_T_DISPLAY_S3)
+            Serial.printf("[BUTTON] Theme switched to %s mode\n", config->invertColors ? "Light" : "Dark");
+        #else
+            Serial.printf("[BUTTON] Theme switched to %s mode\n", config->invertColors ? "Dark" : "Light");
+        #endif
     }
 }
 
@@ -101,6 +120,7 @@ void onButtonLongPressStart() {
         return;
     }
     Serial.println("[RESET] Long press detected - starting countdown...");
+    web_api_log("BUTTON long press - reset countdown started");
 
     // Visual countdown on display
     for (int i = 3; i > 0; i--) {
@@ -111,6 +131,7 @@ void onButtonLongPressStart() {
         // Check if button released early
         if (digitalRead(BUTTON_PIN) == HIGH) {
             Serial.println("[RESET] Cancelled - button released");
+            web_api_log("BUTTON released - reset cancelled");
             display_redraw();  // Trigger redraw of normal screen
             return;
         }
@@ -148,6 +169,9 @@ void button_task(void *param) {
     Serial.println("[BUTTON] Task started on core 0");
     for (;;) {
         button.tick();
+        #if defined(BUTTON2_PIN) && defined(LILYGO_T_DISPLAY_S3)
+            button2.tick();
+        #endif
         vTaskDelay(pdMS_TO_TICKS(10));  // 10ms polling = responsive buttons
     }
 }
@@ -396,6 +420,10 @@ void setup() {
         button.attachDoubleClick(onButtonDoubleClick);
         button.attachMultiClick(onButtonMultiClick);          // Triple-click for inversion
         button.attachLongPressStart(onButtonLongPressStart);  // Factory reset handler
+        #if defined(BUTTON2_PIN) && defined(LILYGO_T_DISPLAY_S3)
+            button2.setDebounceMs(50);
+            button2.attachClick(onButton2Click);                // Display on/off
+        #endif
         Serial.println("[INIT] Button handlers registered (click/double/triple/long-press)");
     #endif
 
@@ -419,6 +447,9 @@ void setup() {
 
     // Initialize monitor (live stats - display already initialized)
     monitor_init();
+
+    // Local stats API (Issue #12) - opt-in, no-op when disabled
+    web_api_start();
 
     Serial.println("[INIT] Setup complete");
 
@@ -586,6 +617,7 @@ void setupTasks() {
         #endif
     } else {
         Serial.println("[INIT] Monitor task created (mining disabled - no wallet)");
+        web_api_log("BOOT no wallet configured - mining is off (set one on /settings)");
         Serial.println("[INIT] Configure via captive portal or SD card config.json");
     }
 }

@@ -10,6 +10,7 @@
 #include "nvs_config.h"
 #include "../stratum/stratum.h"
 #include "../display/display.h"
+#include "../api/web_api.h"
 
 // WiFiManager instance
 static WiFiManager s_wm;
@@ -51,6 +52,13 @@ static WiFiManagerParameter* s_paramStatsProxy = NULL;
 static WiFiManagerParameter* s_paramHttpsStats = NULL;
 static char s_statsEnabledHtml[512];
 static char s_httpsStatsHtml[512];
+
+// Local stats API parameters (Issue #12)
+static WiFiManagerParameter* s_paramApiHeader = NULL;
+static WiFiManagerParameter* s_paramApiEnabled = NULL;
+static WiFiManagerParameter* s_paramApiWallet = NULL;
+static char s_apiEnabledHtml[512];
+static char s_apiWalletHtml[512];
 
 // Buffers for text inputs only
 static char s_bufPoolPort[8];
@@ -134,6 +142,13 @@ static void saveParamsCallback() {
     }
     if (s_paramHttpsStats) {
         config->enableHttpsStats = (atoi(s_paramHttpsStats->getValue()) == 1);
+    }
+
+    // Local stats API (separate NVS keys - takes effect after restart)
+    if (s_paramApiEnabled && s_paramApiWallet) {
+        bool apiEn = (atoi(s_paramApiEnabled->getValue()) == 1);
+        bool apiWallet = (atoi(s_paramApiWallet->getValue()) == 1);
+        nvs_api_save(apiEn, apiWallet);
     }
 
     // Save to NVS
@@ -347,8 +362,33 @@ void wifi_manager_init() {
     // Use config value as default for hidden input
     s_paramHttpsStats = new WiFiManagerParameter("https_stats", "Direct HTTPS", config->enableHttpsStats ? "1" : "0", 2, s_httpsStatsHtml);
 
+    // Local Stats API Settings (Issue #12)
+    const char* apiHeader = "<br><h3>Local Stats API</h3><div style='font-size:80%;color:#aaa'>AxeOS-compatible HTTP API for HashWatcher / Home Assistant (http://&lt;ip&gt;/api/system/info). Off = no web server, zero hashrate cost.</div>";
+    s_paramApiHeader = new WiFiManagerParameter(apiHeader);
+
+    bool apiEn = nvs_api_enabled();
+    strcpy(s_apiEnabledHtml, "<br><select name='api_en'>");
+    strcat(s_apiEnabledHtml, "<option value='0'");
+    if(!apiEn) strcat(s_apiEnabledHtml, " selected");
+    strcat(s_apiEnabledHtml, ">Disabled (Default)</option>");
+    strcat(s_apiEnabledHtml, "<option value='1'");
+    if(apiEn) strcat(s_apiEnabledHtml, " selected");
+    strcat(s_apiEnabledHtml, ">Enabled</option></select>");
+    s_paramApiEnabled = new WiFiManagerParameter("api_en", "Local Stats API", apiEn ? "1" : "0", 2, s_apiEnabledHtml);
+
+    bool apiWallet = nvs_api_expose_wallet();
+    strcpy(s_apiWalletHtml, "<br><select name='api_wallet'>");
+    strcat(s_apiWalletHtml, "<option value='0'");
+    if(!apiWallet) strcat(s_apiWalletHtml, " selected");
+    strcat(s_apiWalletHtml, ">Masked (Default)</option>");
+    strcat(s_apiWalletHtml, "<option value='1'");
+    if(apiWallet) strcat(s_apiWalletHtml, " selected");
+    strcat(s_apiWalletHtml, ">Full address</option></select>");
+    s_paramApiWallet = new WiFiManagerParameter("api_wallet", "Wallet in API", apiWallet ? "1" : "0", 2, s_apiWalletHtml);
+
     // Configure WiFiManager
     s_wm.setDebugOutput(false);
+    s_wm.setHostname(web_api_get_hostname());
     s_wm.setMinimumSignalQuality(20);
     s_wm.setConnectTimeout(30);
     s_wm.setConfigPortalTimeout(180);
@@ -370,13 +410,13 @@ void wifi_manager_init() {
         "button:hover{background:#ff8c00;}"
         "div{padding:5px 0;}"
         // Hide redundant text inputs for dropdown fields (dropdowns handle these)
-        "input[name='bright'],input[name='scrn_to'],input[name='diff'],input[name='rotation'],input[name='invert'],input[name='https_stats'],input[name='tz'],input[name='stats_en']{display:none;}"
+        "input[name='bright'],input[name='scrn_to'],input[name='diff'],input[name='rotation'],input[name='invert'],input[name='https_stats'],input[name='tz'],input[name='stats_en'],input[name='api_en'],input[name='api_wallet']{display:none;}"
         "</style>"
         "<script>"
         // Sync dropdown values to hidden inputs on load and change
         "function syncDropdowns(){"
         "console.log('[SYNC] Starting dropdown sync...');"
-        "var dd=['bright','scrn_to','diff','rotation','tz','invert','https_stats','stats_en'];"
+        "var dd=['bright','scrn_to','diff','rotation','tz','invert','https_stats','stats_en','api_en','api_wallet'];"
         "dd.forEach(function(n){"
         "var sel=document.querySelector('select[name=\"'+n+'\"]');"
         "var inp=document.querySelector('input[name=\"'+n+'\"]');"
@@ -397,7 +437,7 @@ void wifi_manager_init() {
         "}"
         // Log all values before form submit
         "function logFormValues(){"
-        "var dd=['bright','scrn_to','diff','rotation','tz','invert','https_stats','stats_en'];"
+        "var dd=['bright','scrn_to','diff','rotation','tz','invert','https_stats','stats_en','api_en','api_wallet'];"
         "console.log('[SUBMIT] Form values before submit:');"
         "dd.forEach(function(n){"
         "var sel=document.querySelector('select[name=\"'+n+'\"]');"
@@ -454,6 +494,10 @@ void wifi_manager_init() {
     s_wm.addParameter(s_paramStatsApiUrl);
     s_wm.addParameter(s_paramStatsProxy);
     s_wm.addParameter(s_paramHttpsStats);
+
+    s_wm.addParameter(s_paramApiHeader);
+    s_wm.addParameter(s_paramApiEnabled);
+    s_wm.addParameter(s_paramApiWallet);
 
     s_initialized = true;
     Serial.println("[WIFI] Manager initialized");
@@ -545,18 +589,49 @@ void wifi_manager_start() {
     // If we have stored credentials, try to connect directly
     if (config->ssid[0] != '\0') {
         Serial.printf("[WIFI] Connecting to %s...\n", config->ssid);
+        WiFi.setHostname(web_api_get_hostname());  // DHCP hostname, e.g. sparkminer-a1b2
         WiFi.begin(config->ssid, config->wifiPassword);
 
-        // Wait up to 10 seconds
+        // Credentials changed on the web settings page keep the previous network
+        // as a fallback until the new one has connected once.
+        char prevSsid[MAX_SSID_LENGTH + 1];
+        char prevPass[MAX_PASSWORD_LEN + 1];
+        bool hasPrev = nvs_wifi_prev_load(prevSsid, sizeof(prevSsid), prevPass, sizeof(prevPass));
+
+        // Wait up to 10 seconds (20 when a fallback exists, to give the new network a fair chance)
         int attempts = 0;
-        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+        int maxAttempts = hasPrev ? 40 : 20;
+        while (WiFi.status() != WL_CONNECTED && attempts < maxAttempts) {
             delay(500);
             Serial.print(".");
             attempts++;
         }
         Serial.println();
 
+        if (WiFi.status() != WL_CONNECTED && hasPrev) {
+            Serial.printf("[WIFI] New network failed, returning to %s\n", prevSsid);
+            WiFi.disconnect();
+            delay(200);
+            WiFi.begin(prevSsid, prevPass);
+            attempts = 0;
+            while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+                delay(500);
+                Serial.print(".");
+                attempts++;
+            }
+            Serial.println();
+            if (WiFi.status() == WL_CONNECTED) {
+                // Make the working credentials the stored ones again
+                strncpy(config->ssid, prevSsid, MAX_SSID_LENGTH);
+                config->ssid[MAX_SSID_LENGTH] = '\0';
+                strncpy(config->wifiPassword, prevPass, MAX_PASSWORD_LEN);
+                config->wifiPassword[MAX_PASSWORD_LEN] = '\0';
+                nvs_config_save(config);
+            }
+        }
+
         if (WiFi.status() == WL_CONNECTED) {
+            if (hasPrev) nvs_wifi_prev_clear();
             Serial.printf("[WIFI] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
             strncpy(s_ipAddress, WiFi.localIP().toString().c_str(), sizeof(s_ipAddress));
 

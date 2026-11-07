@@ -277,6 +277,13 @@ static bool loadConfigFromFile(miner_config_t *config) {
         config->enableHttpsStats = doc["enable_https_stats"];
     }
 
+    // Local stats API (optional, stored as separate NVS keys)
+    if (doc.containsKey("api_enabled") || doc.containsKey("api_expose_wallet")) {
+        bool apiEn = doc["api_enabled"] | (bool)SPARKMINER_API_DEFAULT;
+        bool apiWallet = doc["api_expose_wallet"] | false;
+        nvs_api_save(apiEn, apiWallet);
+    }
+
     // Config file stays on SD card - NOT deleted
     // It will only be read again if NVS is reset/cleared
 
@@ -572,8 +579,16 @@ void nvs_config_reset(miner_config_t *config) {
     config->brightness = 100;
     config->screenTimeout = 0;  // Never timeout
     config->rotation = 0;       // Portrait USB Top (default)
+    #if defined(LILYGO_T_DISPLAY_S3)
+        config->rotation = 1;   // 170x320 panel reads best in landscape
+    #endif
     config->displayEnabled = true;
     config->invertColors = true;   // Dark theme (default) - CYD panel is inverted, so invertDisplay(true) = dark
+    #if defined(LILYGO_T_DISPLAY_S3)
+        // ST7789 IPS panel: inversion ON is its normal state, so "false" is the
+        // dark theme here - matching the portal's "Dark (Default)" option.
+        config->invertColors = false;
+    #endif
     config->timezoneOffset = 0;    // UTC+0 default
 
     // Miner defaults
@@ -765,4 +780,128 @@ void nvs_stats_update(uint64_t currentHashes, uint32_t currentShares,
 
     // Save to NVS
     nvs_stats_save(stats);
+}
+
+// ============================================================
+// Local Stats API settings (Issue #12)
+// ============================================================
+
+#define NVS_KEY_API_ENABLED "api_en"
+#define NVS_KEY_API_WALLET  "api_wallet"
+
+static bool s_apiLoaded = false;
+static bool s_apiEnabled = SPARKMINER_API_DEFAULT;
+static bool s_apiExposeWallet = false;
+
+static void loadApiSettings() {
+    if (s_apiLoaded) return;
+    s_apiEnabled = SPARKMINER_API_DEFAULT;
+    s_apiExposeWallet = false;
+    if (s_prefs.begin(NVS_NAMESPACE, true)) {
+        if (s_prefs.isKey(NVS_KEY_API_ENABLED)) {
+            s_apiEnabled = s_prefs.getBool(NVS_KEY_API_ENABLED, SPARKMINER_API_DEFAULT);
+        }
+        if (s_prefs.isKey(NVS_KEY_API_WALLET)) {
+            s_apiExposeWallet = s_prefs.getBool(NVS_KEY_API_WALLET, false);
+        }
+        s_prefs.end();
+    }
+    s_apiLoaded = true;
+}
+
+bool nvs_api_enabled() {
+    loadApiSettings();
+    return s_apiEnabled;
+}
+
+bool nvs_api_expose_wallet() {
+    loadApiSettings();
+    return s_apiExposeWallet;
+}
+
+bool nvs_api_save(bool enabled, bool exposeWallet) {
+    if (!s_prefs.begin(NVS_NAMESPACE, false)) {
+        Serial.println("[NVS] ERROR: Failed to open namespace for API settings");
+        return false;
+    }
+    bool ok = s_prefs.putBool(NVS_KEY_API_ENABLED, enabled) > 0;
+    ok = (s_prefs.putBool(NVS_KEY_API_WALLET, exposeWallet) > 0) && ok;
+    s_prefs.end();
+    s_apiEnabled = enabled;
+    s_apiExposeWallet = exposeWallet;
+    s_apiLoaded = true;
+    Serial.printf("[NVS] API settings saved: enabled=%d, exposeWallet=%d\n", enabled, exposeWallet);
+    return ok;
+}
+
+// ============================================================
+// Web settings page
+// ============================================================
+
+#define NVS_KEY_WEB_PASS   "web_pass"
+#define NVS_KEY_PREV_SSID  "prev_ssid"
+#define NVS_KEY_PREV_PASS  "prev_pass"
+
+void nvs_web_password_get(char *out, size_t outLen) {
+    if (!out || outLen == 0) return;
+    safeStrCpy(out, AP_PASSWORD, outLen);
+    if (s_prefs.begin(NVS_NAMESPACE, true)) {
+        if (s_prefs.isKey(NVS_KEY_WEB_PASS)) {
+            String p = s_prefs.getString(NVS_KEY_WEB_PASS, AP_PASSWORD);
+            if (p.length() > 0) safeStrCpy(out, p.c_str(), outLen);
+        }
+        s_prefs.end();
+    }
+}
+
+bool nvs_web_password_set(const char *password) {
+    if (!password || !password[0]) return false;
+    if (!s_prefs.begin(NVS_NAMESPACE, false)) return false;
+    bool ok = s_prefs.putString(NVS_KEY_WEB_PASS, password) > 0;
+    s_prefs.end();
+    return ok;
+}
+
+bool nvs_wifi_prev_save(const char *ssid, const char *password) {
+    if (!ssid || !ssid[0]) return false;
+    if (!s_prefs.begin(NVS_NAMESPACE, false)) return false;
+    bool ok = s_prefs.putString(NVS_KEY_PREV_SSID, ssid) > 0;
+    s_prefs.putString(NVS_KEY_PREV_PASS, password ? password : "");
+    s_prefs.end();
+    return ok;
+}
+
+bool nvs_wifi_prev_load(char *ssid, size_t ssidLen, char *password, size_t passLen) {
+    if (!ssid || !password || ssidLen == 0 || passLen == 0) return false;
+    ssid[0] = '\0';
+    password[0] = '\0';
+    if (!s_prefs.begin(NVS_NAMESPACE, true)) return false;
+    bool found = s_prefs.isKey(NVS_KEY_PREV_SSID);
+    if (found) {
+        safeStrCpy(ssid, s_prefs.getString(NVS_KEY_PREV_SSID, "").c_str(), ssidLen);
+        if (s_prefs.isKey(NVS_KEY_PREV_PASS)) {
+            safeStrCpy(password, s_prefs.getString(NVS_KEY_PREV_PASS, "").c_str(), passLen);
+        }
+    }
+    s_prefs.end();
+    return found && ssid[0] != '\0';
+}
+
+void nvs_wifi_prev_clear() {
+    if (!s_prefs.begin(NVS_NAMESPACE, true)) return;
+    bool found = s_prefs.isKey(NVS_KEY_PREV_SSID);
+    s_prefs.end();
+    if (!found) return;     // Nothing stored: avoid a flash write on every boot
+    if (s_prefs.begin(NVS_NAMESPACE, false)) {
+        s_prefs.remove(NVS_KEY_PREV_SSID);
+        s_prefs.remove(NVS_KEY_PREV_PASS);
+        s_prefs.end();
+    }
+}
+
+void nvs_factory_reset() {
+    if (s_prefs.begin(NVS_NAMESPACE, false)) {
+        s_prefs.clear();
+        s_prefs.end();
+    }
 }

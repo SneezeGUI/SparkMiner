@@ -283,6 +283,16 @@ Configuration is automatically saved to flash memory after first successful setu
 
 ---
 
+## Local Stats API (optional)
+
+SparkMiner can expose AxeOS / ESP-Miner compatible endpoints (`/api/system/info`,
+`/api/system/statistics`) plus a settings page at `http://<ip>/settings`, so HashWatcher,
+Home Assistant and other BitAxe tools can monitor the miner. It is off by default and costs
+no hashrate while disabled. Enable it in the config portal ("Local Stats API").
+See [WEB_API.md](WEB_API.md).
+
+---
+
 ## Persistent Mining Stats
 
 SparkMiner automatically saves mining statistics to ensure your lifetime totals are preserved across reboots and power cycles.
