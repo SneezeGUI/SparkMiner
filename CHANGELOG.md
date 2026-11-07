@@ -2,6 +2,16 @@
 
 All notable changes to SparkMiner will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Local stats API and settings page** (issue #12, opt-in, default OFF): AxeOS-compatible `/api/system/info` and `/api/system/statistics`, native `/api/sparkminer`, `/api/log`, mDNS announcement and an authenticated `/settings` page (WiFi, pools, display, access). See `WEB_API.md`.
+- **LILYGO T-Display S3 compact layout** for the 170x320 panel (landscape and portrait) and a second-button backlight toggle.
+
+### Fixed
+- **ESP32-S3 hashrate**: `miner_sha256_header` runs from IRAM. The ~20 KB straight-line hot path thrashed the 16 KB instruction cache and limited the S3 to ~1.3 KH/s; it now reaches ~49 KH/s.
+- Pool URL accepts `host:port` and `stratum+tcp://` prefixes.
+
 ## [v2.9.6-pre] - 2026-09-19
 
 ### Fixed
